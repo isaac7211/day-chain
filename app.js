@@ -427,20 +427,22 @@
   const MAX_HISTORY_COLUMNS = 14;
 
   async function renderHistory(){
-    const days = ((await sGet('daychain:days')) || []).slice(0, MAX_HISTORY_COLUMNS);
+    const allDays = (await sGet('daychain:days')) || [];
+    const days = allDays.slice(0, MAX_HISTORY_COLUMNS);
     const container = document.getElementById('historyContent');
 
-    if(days.length === 0){
+    if(allDays.length === 0){
       container.innerHTML = `<div class="hist-empty">No finished routines yet — this fills in after you complete your first one.</div>`;
       return;
     }
 
     // Build row order: current tasks first (in their current order), then any
     // historical steps that no longer exist in the current list, in the order
-    // they were first encountered (most recent day first).
+    // they were first encountered. Scanned across ALL stored days (not just
+    // the displayed columns) so low/high/avg reflect full history.
     const rowKeys = tasks.map(t => ({ taskId: t.id, label: t.name }));
     const knownIds = new Set(rowKeys.map(r => r.taskId));
-    days.forEach(day => {
+    allDays.forEach(day => {
       day.entries.forEach(e => {
         if(!knownIds.has(e.taskId)){
           knownIds.add(e.taskId);
@@ -454,14 +456,15 @@
       const label = new Date(day.startTime).toLocaleDateString(undefined, {month:'short', day:'numeric'});
       html += `<th>${escapeAttr(label)}</th>`;
     });
+    html += `<th class="stat-sep">Low</th><th>High</th><th>Avg</th>`;
     html += `</tr></thead><tbody>`;
 
     html += `<tr class="hist-meta-row"><td>Start</td>`;
     days.forEach(day => { html += `<td>${fmtClock(day.startTime)}</td>`; });
-    html += `</tr>`;
+    html += `<td class="stat-sep"></td><td></td><td></td></tr>`;
     html += `<tr class="hist-meta-row"><td>Finish</td>`;
     days.forEach(day => { html += `<td>${fmtClock(day.finishTime)}</td>`; });
-    html += `</tr>`;
+    html += `<td class="stat-sep"></td><td></td><td></td></tr>`;
 
     rowKeys.forEach(rk => {
       html += `<tr><td>${escapeAttr(rk.label)}</td>`;
@@ -477,11 +480,24 @@
           html += `<td class="hist-cell ${cls}">${Math.round(entry.actualMin)}/${Math.round(entry.plannedMin)}</td>`;
         }
       });
+
+      const durations = allDays
+        .map(day => day.entries.find(e => e.taskId === rk.taskId))
+        .filter(e => e && !e.skipped)
+        .map(e => e.actualMin);
+      if(durations.length){
+        const low = Math.round(Math.min(...durations));
+        const high = Math.round(Math.max(...durations));
+        const avg = Math.round(durations.reduce((a,b)=>a+b,0) / durations.length);
+        html += `<td class="hist-cell stat-sep">${low}</td><td class="hist-cell">${high}</td><td class="hist-cell">${avg}</td>`;
+      } else {
+        html += `<td class="hist-cell na stat-sep">–</td><td class="hist-cell na">–</td><td class="hist-cell na">–</td>`;
+      }
       html += `</tr>`;
     });
 
     html += `</tbody></table></div>`;
-    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Most recent day on the left.</div>`;
+    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Low/High/Avg are actual minutes across your full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
     container.innerHTML = html;
   }
 
