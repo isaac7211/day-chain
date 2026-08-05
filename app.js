@@ -486,10 +486,6 @@
   }
 
   // ---------- AUTH ----------
-  function isMobileBrowser(){
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-  }
-
   function setSigninError(msg){
     const el = document.getElementById('signinError');
     if(msg){ el.textContent = msg; el.hidden = false; }
@@ -500,22 +496,18 @@
     setSigninError(null);
     const provider = new firebase.auth.GoogleAuthProvider();
     try{
-      if(isMobileBrowser()){
-        await auth.signInWithRedirect(provider);
-      } else {
-        await auth.signInWithPopup(provider);
-      }
+      // signInWithRedirect was tried here for mobile, but Safari's
+      // cross-site-tracking protection blocks it from picking up the auth
+      // result on return (our authDomain, day-chain.firebaseapp.com, is a
+      // different origin than where this app is hosted). signInWithPopup
+      // talks to the popup window directly while it's open instead of
+      // relying on storage that survives a full-page redirect, so it works
+      // on both desktop and mobile Safari here.
+      await auth.signInWithPopup(provider);
     }catch(e){
       console.error('sign-in failed', e);
       setSigninError('Sign-in failed. Please try again.');
     }
-  });
-
-  // Surfaces errors from the mobile signInWithRedirect flow; the resulting
-  // sign-in itself is delivered through onAuthStateChanged below either way.
-  auth.getRedirectResult().catch(e=>{
-    console.error('redirect sign-in error', e);
-    setSigninError('Sign-in failed. Please try again.');
   });
 
   auth.onAuthStateChanged(async (user)=>{
