@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>Day Chain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #1b211f;
+    --surface: #232a27;
+    --surface-2: #2b332f;
+    --border: rgba(237,232,224,0.09);
+    --text: #ede8e0;
+    --text-dim: #9ba39c;
+    --text-faint: #6f766f;
+    --amber: #e8a24b;
+    --amber-dim: rgba(232,162,75,0.14);
+    --sage: #8fb595;
+    --sage-dim: rgba(143,181,149,0.14);
+    --coral: #d2694f;
+    --coral-dim: rgba(210,105,79,0.14);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background: radial-gradient(ellipse 120% 80% at 50% -10%, #26302b 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, sans-serif;
+    min-height: 100vh;
+    display:flex;
+    justify-content:center;
+  }
+  #app{
+    width:100%;
+    max-width: 480px;
+    padding: 20px 18px 48px;
+    min-height:100vh;
+  }
+  header{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom: 22px;
+  }
+  .wordmark{
+    font-family:'Fraunces', serif;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .wordmark span{ color: var(--amber); }
+  .date-label{ font-size:12px; color: var(--text-faint); margin-top:2px; }
+  #settingsBtn, #historyBtn{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width:38px; height:38px;
+    border-radius: 10px;
+    font-size:16px;
+    cursor:pointer;
+  }
+  #settingsBtn:hover, #historyBtn:hover{ color: var(--text); }
+
+  .card{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 14px;
+  }
+  .label{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 10px;
+  }
+
+  /* HERO */
+  .hero{
+    text-align:center;
+    padding: 30px 18px 26px;
+    background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    margin-bottom: 14px;
+    position: relative;
+    overflow:hidden;
+  }
+  .hero::before{
+    content:"";
+    position:absolute;
+    top:-60%; left:50%;
+    width:280px; height:280px;
+    transform: translateX(-50%);
+    background: radial-gradient(circle, var(--amber-dim) 0%, transparent 70%);
+    animation: breathe 6s ease-in-out infinite;
+  }
+  @keyframes breathe{
+    0%,100%{ opacity:0.6; transform: translateX(-50%) scale(1); }
+    50%{ opacity:1; transform: translateX(-50%) scale(1.12); }
+  }
+  @media (prefers-reduced-motion: reduce){
+    .hero::before{ animation: none; }
+  }
+  .hero .eyebrow{
+    font-size:12px;
+    color: var(--text-dim);
+    letter-spacing:0.04em;
+    position:relative;
+    margin-bottom:6px;
+  }
+  .hero-time{
+    font-family:'Fraunces', serif;
+    font-optical-sizing: auto;
+    font-weight: 500;
+    font-size: 56px;
+    line-height:1.05;
+    letter-spacing:-0.01em;
+    position:relative;
+  }
+  .delta-badge{
+    display:inline-block;
+    margin-top:12px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight:600;
+    position:relative;
+  }
+  .delta-badge.ahead{ background: var(--sage-dim); color: var(--sage); }
+  .delta-badge.behind{ background: var(--coral-dim); color: var(--coral); }
+  .delta-badge.onpace{ background: var(--amber-dim); color: var(--amber); }
+
+  /* CURRENT TASK */
+  .current-task .task-name{
+    font-family:'Fraunces', serif;
+    font-size: 24px;
+    font-weight:500;
+    margin-bottom: 12px;
+  }
+  .timer-row{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    margin-bottom:16px;
+  }
+  .timer-elapsed{ font-size: 30px; font-weight:600; font-variant-numeric: tabular-nums; }
+  .timer-planned{ font-size: 14px; color: var(--text-faint); }
+  .pace-note{ font-size:13px; margin-bottom:16px; }
+  .pace-note.over{ color: var(--coral); }
+  .pace-note.under{ color: var(--sage); }
+  .btn-row{ display:flex; gap:10px; }
+  button{
+    font-family:'Inter',sans-serif;
+    cursor:pointer;
+    border-radius: 12px;
+    border: none;
+    font-size: 15px;
+    font-weight:600;
+    padding: 13px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-primary{ background: var(--amber); color:#241a0d; flex:1; }
+  .btn-primary:active{ transform: scale(0.98); }
+  .btn-ghost{ background: transparent; color: var(--text-dim); border:1px solid var(--border); }
+  .btn-ghost:hover{ color: var(--text); }
+  .btn-small{ padding: 9px 14px; font-size:13px; }
+
+  /* CHAIN LISTS */
+  ul{ list-style:none; margin:0; padding:0; }
+  .chain-item, .completed-item{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  .chain-item:last-child, .completed-item:last-child{ border-bottom:none; }
+  .chain-item .name{ color: var(--text); }
+  .chain-item .time{ color: var(--text-dim); font-variant-numeric: tabular-nums; font-size:13px; }
+  .completed-item .name{ color: var(--text-dim); }
+  .completed-item .diff{ font-variant-numeric: tabular-nums; font-size:13px; }
+  .completed-item .diff.over{ color: var(--coral); }
+  .completed-item .diff.under{ color: var(--sage); }
+  .completed-item .diff.even{ color: var(--text-faint); }
+
+  #endBtn{ width:100%; margin-top: 6px; }
+
+  /* SETUP SCREEN */
+  .task-row{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .task-row:last-child{ border-bottom:none; }
+  .task-row input[type=text]{
+    flex:1;
+    background:transparent;
+    border:none;
+    color: var(--text);
+    font-size:15px;
+    font-family:'Inter',sans-serif;
+    padding: 6px 2px;
+  }
+  .task-row input[type=text]:focus{ outline:none; border-bottom: 1px solid var(--amber); }
+  .task-row input[type=number]{
+    width: 52px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    text-align:center;
+    padding: 7px 2px;
+    font-size:14px;
+    font-family:'Inter',sans-serif;
+  }
+  .task-row .unit{ font-size:12px; color:var(--text-faint); width:24px; }
+  .icon-btn{
+    background:transparent;
+    border:none;
+    color: var(--text-faint);
+    font-size:15px;
+    padding: 4px 6px;
+  }
+  .icon-btn:hover{ color: var(--text); }
+  .add-task-btn{
+    width:100%;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px dashed var(--border);
+    margin-top: 10px;
+    padding: 11px;
+    font-size:14px;
+  }
+  .settings-row{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:14px;
+  }
+  .settings-row label{ font-size:14px; color: var(--text-dim); }
+  .settings-row input[type=time]{
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-family:'Inter',sans-serif;
+    font-size:14px;
+  }
+  .preview-line{
+    font-size:13px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+  .preview-line b{ color: var(--text); font-weight:600; }
+  .total-line{ font-size:13px; color: var(--text-faint); margin-top:10px; }
+  #startBtn{ width:100%; margin-top:16px; padding:15px; font-size:16px; }
+
+  [hidden]{ display:none !important; }
+
+  .summary-table{ width:100%; border-collapse: collapse; font-size:13px; }
+  .summary-table td{ padding:8px 0; border-bottom:1px solid var(--border); }
+  .summary-table td:last-child{ text-align:right; font-variant-numeric: tabular-nums; }
+
+  /* HISTORY */
+  .hist-wrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .hist-table{ border-collapse: collapse; font-size:13px; white-space:nowrap; }
+  .hist-table th, .hist-table td{
+    padding: 9px 12px;
+    text-align:center;
+    border-bottom: 1px solid var(--border);
+  }
+  .hist-table th:first-child, .hist-table td:first-child{
+    position: sticky; left:0;
+    background: var(--surface);
+    text-align:left;
+    padding-left:0;
+    color: var(--text-dim);
+    font-weight:500;
+    z-index:1;
+  }
+  .hist-table thead th{
+    color: var(--text-faint);
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.04em;
+    font-weight:600;
+    padding-bottom:12px;
+  }
+  .hist-table tr.hist-meta-row td{ color: var(--text-dim); font-size:12px; }
+  .hist-table tr.hist-meta-row td:first-child{ color: var(--text-faint); }
+  .hist-cell.over{ color: var(--coral); }
+  .hist-cell.under{ color: var(--sage); }
+  .hist-cell.even{ color: var(--text-dim); }
+  .hist-cell.skip{ color: var(--text-faint); font-style:italic; }
+  .hist-cell.na{ color: var(--text-faint); }
+  .hist-empty{ color: var(--text-faint); font-size:14px; text-align:center; padding: 20px 0; }
+  .hist-note{ font-size:12px; color: var(--text-faint); margin-top:10px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div>
+      <div class="wordmark">Day<span>Chain</span></div>
+      <div class="date-label" id="dateLabel"></div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button id="historyBtn" title="History">🕘</button>
+      <button id="settingsBtn" title="Edit routine">⚙</button>
+    </div>
+  </header>
+
+  <!-- SETUP SCREEN -->
+  <main id="screen-setup">
+    <div class="card">
+      <div class="label">Your routine</div>
+      <ul id="taskEditList"></ul>
+      <button class="add-task-btn" id="addTaskBtn">+ Add step</button>
+    </div>
+
+    <div class="card">
+      <div class="settings-row">
+        <label>Target work-start time</label>
+        <input type="time" id="targetTimeInput">
+      </div>
+      <div class="preview-line" id="setupPreview"></div>
+      <div class="total-line" id="setupTotal"></div>
+    </div>
+
+    <button class="btn-primary" id="startBtn">I'm up — start the chain</button>
+  </main>
+
+  <!-- ACTIVE SCREEN -->
+  <main id="screen-active" hidden>
+
+    <div class="hero">
+      <div class="eyebrow">Projected work-start</div>
+      <div class="hero-time" id="projectedTime">—</div>
+      <div class="delta-badge" id="deltaBadge">—</div>
+    </div>
+
+    <div class="card current-task">
+      <div class="label">Right now</div>
+      <div class="task-name" id="currentTaskName">—</div>
+      <div class="timer-row">
+        <span class="timer-elapsed" id="currentElapsed">0:00</span>
+        <span class="timer-planned" id="currentPlanned">/ 0:00 planned</span>
+      </div>
+      <div class="pace-note" id="paceNote"></div>
+      <div class="btn-row">
+        <button class="btn-primary" id="doneBtn">Mark done</button>
+        <button class="btn-ghost" id="skipBtn">Skip</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Up next</div>
+      <ul id="upcomingList"></ul>
+    </div>
+
+    <div class="card" id="completedCard" hidden>
+      <div class="label">Done so far</div>
+      <ul id="completedList"></ul>
+    </div>
+
+    <button class="btn-ghost btn-small" id="endBtn">End routine early</button>
+  </main>
+
+  <!-- SUMMARY SCREEN -->
+  <main id="screen-summary" hidden>
+    <div class="card">
+      <div class="label">This morning</div>
+      <div class="hero-time" id="summaryFinish" style="font-size:38px;text-align:left;margin-bottom:4px;"></div>
+      <div class="preview-line" id="summaryVsTarget"></div>
+    </div>
+    <div class="card">
+      <div class="label">Planned vs. actual</div>
+      <table class="summary-table" id="summaryTable"></table>
+    </div>
+    <button class="btn-primary" id="newDayBtn">Done</button>
+  </main>
+
+  <!-- HISTORY SCREEN -->
+  <main id="screen-history" hidden>
+    <div class="card">
+      <div class="label">Your routine, day by day</div>
+      <div id="historyContent"></div>
+    </div>
+    <button class="btn-ghost" id="historyBackBtn" style="width:100%;">Back</button>
+  </main>
+
+</div>
+
+<script>
+(function(){
+
+  const DEFAULT_TASKS = [
+    {id:'t1', name:'Wake up', baseEst:10},
+    {id:'t2', name:'Get out of bed', baseEst:20},
+    {id:'t3', name:'Warm up stretch', baseEst:10},
+    {id:'t4', name:'Exercise', baseEst:40},
+    {id:'t5', name:'Cool down', baseEst:15},
+    {id:'t6', name:'Make breakfast', baseEst:15},
+    {id:'t7', name:'Eat breakfast', baseEst:30},
+    {id:'t8', name:'Brush teeth & biz', baseEst:10},
+    {id:'t9', name:'Shower', baseEst:40},
+    {id:'t10', name:'Prep for work', baseEst:10},
+  ];
+  const DEFAULT_SETTINGS = { targetTime: '11:00' };
+
+  let tasks = [];
+  let settings = { ...DEFAULT_SETTINGS };
+  let history = {}; // { taskId: [actualMin, ...] }
+  let today = null; // active routine state
+  let tickHandle = null;
+
+  // ---------- storage helpers (browser localStorage — for self-hosted use) ----------
+  async function sGet(key){
+    try{
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : null;
+    }catch(e){ return null; }
+  }
+  async function sSet(key, val){
+    try{ localStorage.setItem(key, JSON.stringify(val)); }
+    catch(e){ console.error('storage set failed', key, e); }
+  }
+
+  function uid(){ return 't' + Math.random().toString(36).slice(2,9); }
+  function todayStr(){ return new Date().toDateString(); }
+  function fmtClock(ms){
+    const d = new Date(ms);
+    let h = d.getHours(); const m = d.getMinutes();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if(h === 0) h = 12;
+    return h + ':' + String(m).padStart(2,'0') + ' ' + ampm;
+  }
+  function fmtMMSS(ms){
+    const totalSec = Math.max(0, Math.floor(ms/1000));
+    const m = Math.floor(totalSec/60), s = totalSec%60;
+    return m + ':' + String(s).padStart(2,'0');
+  }
+  function estimateFor(task){
+    const h = history[task.id];
+    if(h && h.length){
+      const recent = h.slice(-7);
+      const avg = recent.reduce((a,b)=>a+b,0)/recent.length;
+      return avg;
+    }
+    return task.baseEst;
+  }
+  function targetMsForToday(){
+    const [hh,mm] = (settings.targetTime || '11:00').split(':').map(Number);
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  // ---------- load ----------
+  async function load(){
+    tasks = (await sGet('daychain:tasks')) || DEFAULT_TASKS.map(t=>({...t}));
+    settings = (await sGet('daychain:settings')) || {...DEFAULT_SETTINGS};
+    history = (await sGet('daychain:history')) || {};
+    const savedToday = await sGet('daychain:today');
+    if(savedToday && savedToday.dateStr === todayStr() && savedToday.status === 'active'){
+      today = savedToday;
+    } else {
+      today = null;
+    }
+    document.getElementById('dateLabel').textContent =
+      new Date().toLocaleDateString(undefined, {weekday:'long', month:'short', day:'numeric'});
+  }
+
+  // ---------- render router ----------
+  function showScreen(id){
+    ['screen-setup','screen-active','screen-summary','screen-history'].forEach(s=>{
+      document.getElementById(s).hidden = (s !== id);
+    });
+  }
+
+  function renderAll(){
+    if(today && today.status === 'active'){
+      renderActive();
+      showScreen('screen-active');
+      if(!tickHandle) tickHandle = setInterval(renderActive, 1000);
+    } else if(today && today.status === 'summary'){
+      renderSummary();
+      showScreen('screen-summary');
+      if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+    } else {
+      renderSetup();
+      showScreen('screen-setup');
+      if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+    }
+  }
+
+  // ---------- SETUP screen ----------
+  function renderSetup(){
+    const list = document.getElementById('taskEditList');
+    list.innerHTML = '';
+    tasks.forEach((t, idx) => {
+      const li = document.createElement('li');
+      li.className = 'task-row';
+      li.innerHTML = `
+        <input type="text" value="${escapeAttr(t.name)}" data-idx="${idx}" class="name-input">
+        <input type="number" min="1" value="${t.baseEst}" data-idx="${idx}" class="min-input">
+        <span class="unit">min</span>
+        <button class="icon-btn up-btn" data-idx="${idx}" ${idx===0?'disabled style="opacity:.25"':''}>↑</button>
+        <button class="icon-btn down-btn" data-idx="${idx}" ${idx===tasks.length-1?'disabled style="opacity:.25"':''}>↓</button>
+        <button class="icon-btn remove-btn" data-idx="${idx}">✕</button>
+      `;
+      list.appendChild(li);
+    });
+
+    list.querySelectorAll('.name-input').forEach(inp=>{
+      inp.addEventListener('input', e=>{
+        tasks[+e.target.dataset.idx].name = e.target.value;
+        updateSetupPreview();
+      });
+      inp.addEventListener('blur', persistTasks);
+    });
+    list.querySelectorAll('.min-input').forEach(inp=>{
+      inp.addEventListener('input', e=>{
+        const v = Math.max(1, parseInt(e.target.value)||1);
+        tasks[+e.target.dataset.idx].baseEst = v;
+        updateSetupPreview();
+      });
+      inp.addEventListener('blur', persistTasks);
+    });
+    list.querySelectorAll('.up-btn').forEach(b=>b.addEventListener('click', e=>{
+      const i = +e.target.dataset.idx;
+      if(i>0){ [tasks[i-1],tasks[i]] = [tasks[i],tasks[i-1]]; persistTasks(); renderSetup(); }
+    }));
+    list.querySelectorAll('.down-btn').forEach(b=>b.addEventListener('click', e=>{
+      const i = +e.target.dataset.idx;
+      if(i<tasks.length-1){ [tasks[i+1],tasks[i]] = [tasks[i],tasks[i+1]]; persistTasks(); renderSetup(); }
+    }));
+    list.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click', e=>{
+      const i = +e.target.dataset.idx;
+      tasks.splice(i,1);
+      persistTasks(); renderSetup();
+    }));
+
+    document.getElementById('targetTimeInput').value = settings.targetTime;
+    updateSetupPreview();
+  }
+
+  function updateSetupPreview(){
+    const totalMin = tasks.reduce((sum,t)=> sum + estimateFor(t), 0);
+    const now = Date.now();
+    const finish = now + totalMin*60000;
+    document.getElementById('setupPreview').innerHTML =
+      `If you start right now, you'd finish around <b>${fmtClock(finish)}</b>.`;
+    document.getElementById('setupTotal').textContent =
+      `Total routine: ${Math.round(totalMin)} min across ${tasks.length} step${tasks.length===1?'':'s'}`;
+  }
+
+  function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+
+  async function persistTasks(){ await sSet('daychain:tasks', tasks); }
+  async function persistSettings(){ await sSet('daychain:settings', settings); }
+  async function persistHistory(){ await sSet('daychain:history', history); }
+  async function persistToday(){ await sSet('daychain:today', today); }
+
+  document.getElementById('addTaskBtn').addEventListener('click', ()=>{
+    tasks.push({id: uid(), name:'New step', baseEst:10});
+    persistTasks(); renderSetup();
+  });
+  document.getElementById('targetTimeInput').addEventListener('change', e=>{
+    settings.targetTime = e.target.value;
+    persistSettings(); updateSetupPreview();
+  });
+  document.getElementById('startBtn').addEventListener('click', async ()=>{
+    if(tasks.length === 0) return;
+    const now = Date.now();
+    const baselineFinish = now + tasks.reduce((s,t)=>s+estimateFor(t),0)*60000;
+    today = {
+      dateStr: todayStr(),
+      status: 'active',
+      startTime: now,
+      currentIndex: 0,
+      currentTaskStart: now,
+      baselineFinish: baselineFinish,
+      completedLog: []
+    };
+    await persistToday();
+    renderAll();
+  });
+
+  // ---------- ACTIVE screen ----------
+  function renderActive(){
+    const now = Date.now();
+    const idx = today.currentIndex;
+
+    // build projections
+    const inRoutine = idx < tasks.length;
+    const currentTask = inRoutine ? tasks[idx] : null;
+    const currentElapsedMs = inRoutine ? (now - today.currentTaskStart) : 0;
+    const remaining = inRoutine ? tasks.slice(idx+1) : [];
+    const remainingEstMs = remaining.reduce((s,t)=> s + estimateFor(t)*60000, 0);
+    // Time still owed on the CURRENT step: its full planned duration until you've
+    // actually used it up, then zero (at which point overrun shows up naturally
+    // because "now" itself has moved past the plan).
+    const currentRemainingMs = inRoutine
+      ? Math.max(0, estimateFor(currentTask)*60000 - currentElapsedMs)
+      : 0;
+    const projectedFinishMs = now + currentRemainingMs + remainingEstMs;
+
+    document.getElementById('projectedTime').textContent = fmtClock(projectedFinishMs);
+
+    const target = targetMsForToday();
+    const deltaMin = Math.round((projectedFinishMs - target)/60000);
+    const badge = document.getElementById('deltaBadge');
+    if(Math.abs(deltaMin) <= 1){
+      badge.textContent = `Right on your ${settings.targetTime} target`;
+      badge.className = 'delta-badge onpace';
+    } else if(deltaMin > 0){
+      badge.textContent = `${deltaMin} min after your ${settings.targetTime} target`;
+      badge.className = 'delta-badge behind';
+    } else {
+      badge.textContent = `${Math.abs(deltaMin)} min ahead of your ${settings.targetTime} target`;
+      badge.className = 'delta-badge ahead';
+    }
+
+    if(inRoutine){
+      document.getElementById('currentTaskName').textContent = currentTask.name;
+      document.getElementById('currentElapsed').textContent = fmtMMSS(currentElapsedMs);
+      const plannedMin = estimateFor(currentTask);
+      document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
+      const over = currentElapsedMs - plannedMin*60000;
+      const noteEl = document.getElementById('paceNote');
+      if(over > 60000){
+        noteEl.textContent = `${Math.round(over/60000)} min over — the rest of your chain will shift.`;
+        noteEl.className = 'pace-note over';
+      } else if(over < -60000){
+        noteEl.textContent = `${Math.round(-over/60000)} min ahead of plan on this step.`;
+        noteEl.className = 'pace-note under';
+      } else {
+        noteEl.textContent = `On pace for this step.`;
+        noteEl.className = 'pace-note';
+      }
+    }
+
+    // upcoming list with live-computed clock times
+    const upcomingList = document.getElementById('upcomingList');
+    upcomingList.innerHTML = '';
+    let cursor = now + currentRemainingMs;
+    if(remaining.length === 0){
+      const li = document.createElement('li');
+      li.className = 'chain-item';
+      li.innerHTML = `<span class="name">Nothing left — this is your last step</span>`;
+      upcomingList.appendChild(li);
+    } else {
+      remaining.forEach(t=>{
+        const est = estimateFor(t);
+        const li = document.createElement('li');
+        li.className = 'chain-item';
+        li.innerHTML = `<span class="name">${escapeAttr(t.name)}</span><span class="time">~${Math.round(est)} min · by ${fmtClock(cursor+est*60000)}</span>`;
+        upcomingList.appendChild(li);
+        cursor += est*60000;
+      });
+    }
+
+    // completed list
+    const completedCard = document.getElementById('completedCard');
+    const completedList = document.getElementById('completedList');
+    if(today.completedLog.length){
+      completedCard.hidden = false;
+      completedList.innerHTML = '';
+      today.completedLog.forEach(e=>{
+        const li = document.createElement('li');
+        li.className = 'completed-item';
+        if(e.skipped){
+          li.innerHTML = `<span class="name">${escapeAttr(e.name)}</span><span class="diff even" style="font-style:italic;">skipped</span>`;
+        } else {
+          const diff = Math.round(e.actualMin - e.plannedMin);
+          const cls = diff > 0 ? 'over' : (diff < 0 ? 'under' : 'even');
+          const diffText = diff === 0 ? 'on plan' : (diff > 0 ? `+${diff} min` : `${diff} min`);
+          li.innerHTML = `<span class="name">${escapeAttr(e.name)}</span><span class="diff ${cls}">${diffText}</span>`;
+        }
+        completedList.appendChild(li);
+      });
+    } else {
+      completedCard.hidden = true;
+    }
+
+    if(!inRoutine){
+      finishRoutine();
+    }
+  }
+
+  async function markDone(skip){
+    const now = Date.now();
+    const idx = today.currentIndex;
+    if(idx >= tasks.length) return;
+    const task = tasks[idx];
+    const actualMin = Math.max(0, (now - today.currentTaskStart)/60000);
+    const plannedMin = estimateFor(task);
+
+    if(!skip){
+      today.completedLog.push({ taskId: task.id, name: task.name, actualMin, plannedMin, skipped:false });
+      if(!history[task.id]) history[task.id] = [];
+      history[task.id].push(actualMin);
+      if(history[task.id].length > 7) history[task.id] = history[task.id].slice(-7);
+      await persistHistory();
+    } else {
+      today.completedLog.push({ taskId: task.id, name: task.name, actualMin: 0, plannedMin, skipped:true });
+    }
+
+    today.currentIndex += 1;
+    today.currentTaskStart = now;
+    await persistToday();
+    renderActive();
+  }
+
+  document.getElementById('doneBtn').addEventListener('click', ()=> markDone(false));
+  document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
+  document.getElementById('endBtn').addEventListener('click', ()=> finishRoutine());
+  document.getElementById('settingsBtn').addEventListener('click', async ()=>{
+    if(today && today.status === 'active'){
+      const ok = confirm('Editing your steps will end the current routine. Continue?');
+      if(!ok) return;
+      today.status = null;
+      await sSet('daychain:today', null);
+      today = null;
+    }
+    renderAll();
+  });
+
+  async function finishRoutine(){
+    if(!today || today.status !== 'active') return;
+    today.status = 'summary';
+    today.finishTime = Date.now();
+    await persistToday();
+
+    const days = (await sGet('daychain:days')) || [];
+    days.unshift({
+      dateStr: today.dateStr,
+      startTime: today.startTime,
+      finishTime: today.finishTime,
+      entries: today.completedLog.map(e => ({
+        taskId: e.taskId, name: e.name, plannedMin: e.plannedMin,
+        actualMin: e.actualMin, skipped: !!e.skipped
+      }))
+    });
+    if(days.length > 60) days.length = 60;
+    await sSet('daychain:days', days);
+
+    renderAll();
+  }
+
+  // ---------- SUMMARY screen ----------
+  function renderSummary(){
+    const finish = today.finishTime || Date.now();
+    document.getElementById('summaryFinish').textContent = fmtClock(finish);
+    const target = targetMsForToday();
+    const deltaMin = Math.round((finish - target)/60000);
+    document.getElementById('summaryVsTarget').innerHTML =
+      deltaMin === 0 ? `Right on your ${settings.targetTime} target.` :
+      deltaMin > 0 ? `${deltaMin} min after your <b>${settings.targetTime}</b> target.` :
+      `${Math.abs(deltaMin)} min ahead of your <b>${settings.targetTime}</b> target.`;
+
+    const table = document.getElementById('summaryTable');
+    table.innerHTML = '';
+    today.completedLog.forEach(e=>{
+      const row = document.createElement('tr');
+      if(e.skipped){
+        row.innerHTML = `<td>${escapeAttr(e.name)}</td><td style="font-style:italic;">skipped</td>`;
+      } else {
+        const diff = Math.round(e.actualMin - e.plannedMin);
+        const diffText = diff === 0 ? 'on plan' : (diff > 0 ? `+${diff}m` : `${diff}m`);
+        row.innerHTML = `<td>${escapeAttr(e.name)}</td><td>${Math.round(e.actualMin)}m actual · ${Math.round(e.plannedMin)}m planned · ${diffText}</td>`;
+      }
+      table.appendChild(row);
+    });
+  }
+
+  document.getElementById('newDayBtn').addEventListener('click', async ()=>{
+    today = null;
+    await sSet('daychain:today', null);
+    renderAll();
+  });
+
+  // ---------- HISTORY screen ----------
+  document.getElementById('historyBtn').addEventListener('click', async ()=>{
+    await renderHistory();
+    showScreen('screen-history');
+  });
+  document.getElementById('historyBackBtn').addEventListener('click', ()=>{
+    renderAll();
+  });
+
+  const MAX_HISTORY_COLUMNS = 14;
+
+  async function renderHistory(){
+    const days = ((await sGet('daychain:days')) || []).slice(0, MAX_HISTORY_COLUMNS);
+    const container = document.getElementById('historyContent');
+
+    if(days.length === 0){
+      container.innerHTML = `<div class="hist-empty">No finished routines yet — this fills in after you complete your first one.</div>`;
+      return;
+    }
+
+    // Build row order: current tasks first (in their current order), then any
+    // historical steps that no longer exist in the current list, in the order
+    // they were first encountered (most recent day first).
+    const rowKeys = tasks.map(t => ({ taskId: t.id, label: t.name }));
+    const knownIds = new Set(rowKeys.map(r => r.taskId));
+    days.forEach(day => {
+      day.entries.forEach(e => {
+        if(!knownIds.has(e.taskId)){
+          knownIds.add(e.taskId);
+          rowKeys.push({ taskId: e.taskId, label: e.name });
+        }
+      });
+    });
+
+    let html = `<div class="hist-wrap"><table class="hist-table"><thead><tr><th>Step</th>`;
+    days.forEach(day => {
+      const label = new Date(day.startTime).toLocaleDateString(undefined, {month:'short', day:'numeric'});
+      html += `<th>${escapeAttr(label)}</th>`;
+    });
+    html += `</tr></thead><tbody>`;
+
+    html += `<tr class="hist-meta-row"><td>Start</td>`;
+    days.forEach(day => { html += `<td>${fmtClock(day.startTime)}</td>`; });
+    html += `</tr>`;
+    html += `<tr class="hist-meta-row"><td>Finish</td>`;
+    days.forEach(day => { html += `<td>${fmtClock(day.finishTime)}</td>`; });
+    html += `</tr>`;
+
+    rowKeys.forEach(rk => {
+      html += `<tr><td>${escapeAttr(rk.label)}</td>`;
+      days.forEach(day => {
+        const entry = day.entries.find(e => e.taskId === rk.taskId);
+        if(!entry){
+          html += `<td class="hist-cell na">–</td>`;
+        } else if(entry.skipped){
+          html += `<td class="hist-cell skip">skip</td>`;
+        } else {
+          const diff = Math.round(entry.actualMin - entry.plannedMin);
+          const cls = diff > 0 ? 'over' : (diff < 0 ? 'under' : 'even');
+          html += `<td class="hist-cell ${cls}">${Math.round(entry.actualMin)}/${Math.round(entry.plannedMin)}</td>`;
+        }
+      });
+      html += `</tr>`;
+    });
+
+    html += `</tbody></table></div>`;
+    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Most recent day on the left.</div>`;
+    container.innerHTML = html;
+  }
+
+  // ---------- init ----------
+  (async function init(){
+    await load();
+    renderAll();
+  })();
+
+})();
+</script>
+</body>
+</html>
