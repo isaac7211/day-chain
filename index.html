@@ -35,6 +35,11 @@
       </div>
     </header>
 
+    <div class="routine-switch" id="routineSwitch">
+      <button class="routine-tab active" id="tabMorning" data-routine="morning">Morning</button>
+      <button class="routine-tab" id="tabNight" data-routine="night">Night</button>
+    </div>
+
     <!-- SETUP SCREEN -->
     <main id="screen-setup">
       <div class="card">
@@ -45,7 +50,7 @@
 
       <div class="card">
         <div class="settings-row">
-          <label>Target work-start time</label>
+          <label id="targetTimeLabel">Target work-start time</label>
           <input type="time" id="targetTimeInput">
         </div>
         <div class="preview-line" id="setupPreview"></div>
@@ -59,7 +64,7 @@
     <main id="screen-active" hidden>
 
       <div class="hero">
-        <div class="eyebrow">Projected work-start</div>
+        <div class="eyebrow" id="heroEyebrow">Projected work-start</div>
         <div class="hero-time" id="projectedTime">—</div>
         <div class="delta-badge" id="deltaBadge">—</div>
       </div>
@@ -94,7 +99,7 @@
     <!-- SUMMARY SCREEN -->
     <main id="screen-summary" hidden>
       <div class="card">
-        <div class="label">This morning</div>
+        <div class="label" id="summaryLabel">This morning</div>
         <div class="hero-time" id="summaryFinish" style="font-size:38px;text-align:left;margin-bottom:4px;"></div>
         <div class="preview-line" id="summaryVsTarget"></div>
       </div>

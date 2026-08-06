@@ -54,6 +54,28 @@ header{
   font-size:16px;
   cursor:pointer;
 }
+
+.routine-switch{
+  display:flex;
+  gap:4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 18px;
+}
+.routine-tab{
+  flex:1;
+  background:transparent;
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 9px;
+  font-size:13px;
+}
+.routine-tab.active{
+  background: var(--surface-2);
+  color: var(--text);
+}
 #settingsBtn:hover, #historyBtn:hover{ color: var(--text); }
 
 .card{

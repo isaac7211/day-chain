@@ -14,22 +14,47 @@
   const auth = firebase.auth();
   const db = firebase.firestore();
 
-  const DEFAULT_TASKS = [
-    {id:'t1', name:'Wake up', baseEst:10},
-    {id:'t2', name:'Get out of bed', baseEst:20},
-    {id:'t3', name:'Warm up stretch', baseEst:10},
-    {id:'t4', name:'Exercise', baseEst:40},
-    {id:'t5', name:'Cool down', baseEst:15},
-    {id:'t6', name:'Make breakfast', baseEst:15},
-    {id:'t7', name:'Eat breakfast', baseEst:30},
-    {id:'t8', name:'Brush teeth & biz', baseEst:10},
-    {id:'t9', name:'Shower', baseEst:40},
-    {id:'t10', name:'Prep for work', baseEst:10},
-  ];
-  const DEFAULT_SETTINGS = { targetTime: '11:00' };
+  // Two independent routines share this app: 'morning' (the original) and
+  // 'night'. Morning keeps using the original unprefixed field names below
+  // so existing data needs no migration; night's fields are prefixed.
+  let currentRoutine = 'morning'; // 'morning' | 'night'
+
+  const DEFAULT_TASKS_BY_ROUTINE = {
+    morning: [
+      {id:'t1', name:'Wake up', baseEst:10},
+      {id:'t2', name:'Get out of bed', baseEst:20},
+      {id:'t3', name:'Warm up stretch', baseEst:10},
+      {id:'t4', name:'Exercise', baseEst:40},
+      {id:'t5', name:'Cool down', baseEst:15},
+      {id:'t6', name:'Make breakfast', baseEst:15},
+      {id:'t7', name:'Eat breakfast', baseEst:30},
+      {id:'t8', name:'Brush teeth & biz', baseEst:10},
+      {id:'t9', name:'Shower', baseEst:40},
+      {id:'t10', name:'Prep for work', baseEst:10},
+    ],
+    night: [], // no assumed steps — built from scratch via "+ Add step"
+  };
+  const DEFAULT_SETTINGS_BY_ROUTINE = {
+    morning: { targetTime: '11:00' },
+    night: { targetTime: '22:30' },
+  };
+  const ROUTINE_COPY = {
+    morning: {
+      targetLabel: 'Target work-start time',
+      eyebrow: 'Projected work-start',
+      startBtn: "I'm up — start the chain",
+      summaryLabel: 'This morning',
+    },
+    night: {
+      targetLabel: 'Target lights-out time',
+      eyebrow: 'Projected lights-out',
+      startBtn: 'Time to wind down — start the chain',
+      summaryLabel: 'Tonight',
+    },
+  };
 
   let tasks = [];
-  let settings = { ...DEFAULT_SETTINGS };
+  let settings = { ...DEFAULT_SETTINGS_BY_ROUTINE.morning };
   let history = {}; // { taskId: [actualMin, ...] }
   let today = null; // active routine state
   let tickHandle = null;
@@ -42,9 +67,12 @@
   let docCache = null;
 
   // Storage keys used throughout the app are prefixed ("daychain:tasks"),
-  // but they're stored as bare fields ("tasks") on the single Firestore doc.
+  // but they're stored as bare fields ("tasks") on the single Firestore doc —
+  // "night_tasks" etc. when the night routine is active, so both routines'
+  // data lives side by side without colliding.
   function fieldNameForKey(key){
-    return key.startsWith('daychain:') ? key.slice('daychain:'.length) : key;
+    const bare = key.startsWith('daychain:') ? key.slice('daychain:'.length) : key;
+    return currentRoutine === 'night' ? ('night_' + bare) : bare;
   }
 
   async function sGet(key){
@@ -85,24 +113,39 @@
   }
   function targetMsForToday(){
     const [hh,mm] = (settings.targetTime || '11:00').split(':').map(Number);
-    const d = new Date();
+    // Anchor to the calendar day the active routine started, not "right
+    // now" — a night routine can still be running past midnight, and its
+    // target belongs to the evening it began, not to the new date.
+    const base = (today && today.startTime) ? new Date(today.startTime) : new Date();
+    const d = new Date(base);
     d.setHours(hh, mm, 0, 0);
     return d.getTime();
   }
 
   // ---------- load ----------
   async function load(){
-    tasks = (await sGet('daychain:tasks')) || DEFAULT_TASKS.map(t=>({...t}));
-    settings = (await sGet('daychain:settings')) || {...DEFAULT_SETTINGS};
+    tasks = (await sGet('daychain:tasks')) || DEFAULT_TASKS_BY_ROUTINE[currentRoutine].map(t=>({...t}));
+    settings = (await sGet('daychain:settings')) || {...DEFAULT_SETTINGS_BY_ROUTINE[currentRoutine]};
     history = (await sGet('daychain:history')) || {};
     const savedToday = await sGet('daychain:today');
-    if(savedToday && savedToday.dateStr === todayStr() && savedToday.status === 'active'){
+    // The night routine stays "in progress" across midnight; morning still
+    // only resumes if it was started earlier the same calendar day.
+    const sameDayRequired = currentRoutine !== 'night';
+    if(savedToday && savedToday.status === 'active' && (!sameDayRequired || savedToday.dateStr === todayStr())){
       today = savedToday;
     } else {
       today = null;
     }
     document.getElementById('dateLabel').textContent =
       new Date().toLocaleDateString(undefined, {weekday:'long', month:'short', day:'numeric'});
+  }
+
+  function applyRoutineCopy(){
+    const copy = ROUTINE_COPY[currentRoutine];
+    document.getElementById('targetTimeLabel').textContent = copy.targetLabel;
+    document.getElementById('startBtn').textContent = copy.startBtn;
+    document.getElementById('heroEyebrow').textContent = copy.eyebrow;
+    document.getElementById('summaryLabel').textContent = copy.summaryLabel;
   }
 
   // ---------- render router ----------
@@ -113,6 +156,7 @@
   }
 
   function renderAll(){
+    applyRoutineCopy();
     if(today && today.status === 'active'){
       renderActive();
       showScreen('screen-active');
@@ -205,7 +249,7 @@
     persistSettings(); updateSetupPreview();
   });
   document.getElementById('startBtn').addEventListener('click', async ()=>{
-    if(tasks.length === 0) return;
+    if(tasks.length === 0){ alert('Add at least one step before starting.'); return; }
     const now = Date.now();
     const baselineFinish = now + tasks.reduce((s,t)=>s+estimateFor(t),0)*60000;
     today = {
@@ -526,11 +570,33 @@
     }
   });
 
+  // ---------- ROUTINE SWITCH ----------
+  function updateRoutineSwitchUI(){
+    document.getElementById('tabMorning').classList.toggle('active', currentRoutine === 'morning');
+    document.getElementById('tabNight').classList.toggle('active', currentRoutine === 'night');
+  }
+
+  document.getElementById('routineSwitch').addEventListener('click', async (e)=>{
+    const btn = e.target.closest('.routine-tab');
+    if(!btn || btn.dataset.routine === currentRoutine) return;
+    currentRoutine = btn.dataset.routine;
+    updateRoutineSwitchUI();
+    // "activeRoutine" is doc-level metadata (which routine to show), not
+    // per-routine data, so it's written directly rather than through
+    // sSet/fieldNameForKey.
+    docCache.activeRoutine = currentRoutine;
+    docRef.set({ activeRoutine: currentRoutine }, { merge: true }).catch(e=>console.error('save active routine failed', e));
+    await load();
+    renderAll();
+  });
+
   auth.onAuthStateChanged(async (user)=>{
     if(user){
       docRef = db.collection('users').doc(user.uid).collection('appdata').doc('daychain');
       const snap = await docRef.get();
       docCache = snap.exists ? snap.data() : {};
+      currentRoutine = (docCache.activeRoutine === 'night') ? 'night' : 'morning';
+      updateRoutineSwitchUI();
 
       document.getElementById('screen-signin').hidden = true;
       document.getElementById('appShell').hidden = false;
