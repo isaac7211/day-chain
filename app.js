@@ -223,6 +223,10 @@
       `If you start right now, you'd finish around <b>${fmtClock(finish)}</b>.`;
     document.getElementById('setupTotal').textContent =
       `Total routine: ${Math.round(totalMin)} min across ${tasks.length} step${tasks.length===1?'':'s'}`;
+
+    const startByMs = targetMsForToday() - totalMin*60000;
+    document.getElementById('startByPreview').innerHTML =
+      `Start by <b>${fmtClock(startByMs)}</b> to hit your target.`;
   }
 
   function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
