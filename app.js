@@ -55,7 +55,6 @@
 
   let tasks = [];
   let settings = { ...DEFAULT_SETTINGS_BY_ROUTINE.morning };
-  let history = {}; // { taskId: [actualMin, ...] }
   let today = null; // active routine state
   let tickHandle = null;
 
@@ -102,13 +101,7 @@
     const m = Math.floor(totalSec/60), s = totalSec%60;
     return m + ':' + String(s).padStart(2,'0');
   }
-  function estimateFor(task){
-    const h = history[task.id];
-    if(h && h.length){
-      const recent = h.slice(-7);
-      const avg = recent.reduce((a,b)=>a+b,0)/recent.length;
-      return avg;
-    }
+  function plannedMinFor(task){
     return task.baseEst;
   }
   function targetMsForToday(){
@@ -126,7 +119,6 @@
   async function load(){
     tasks = (await sGet('daychain:tasks')) || DEFAULT_TASKS_BY_ROUTINE[currentRoutine].map(t=>({...t}));
     settings = (await sGet('daychain:settings')) || {...DEFAULT_SETTINGS_BY_ROUTINE[currentRoutine]};
-    history = (await sGet('daychain:history')) || {};
     const savedToday = await sGet('daychain:today');
     // The night routine stays "in progress" across midnight; morning still
     // only resumes if it was started earlier the same calendar day.
@@ -224,7 +216,7 @@
   }
 
   function updateSetupPreview(){
-    const totalMin = tasks.reduce((sum,t)=> sum + estimateFor(t), 0);
+    const totalMin = tasks.reduce((sum,t)=> sum + plannedMinFor(t), 0);
     const now = Date.now();
     const finish = now + totalMin*60000;
     document.getElementById('setupPreview').innerHTML =
@@ -237,7 +229,6 @@
 
   async function persistTasks(){ await sSet('daychain:tasks', tasks); }
   async function persistSettings(){ await sSet('daychain:settings', settings); }
-  async function persistHistory(){ await sSet('daychain:history', history); }
   async function persistToday(){ await sSet('daychain:today', today); }
 
   document.getElementById('addTaskBtn').addEventListener('click', ()=>{
@@ -251,7 +242,7 @@
   document.getElementById('startBtn').addEventListener('click', async ()=>{
     if(tasks.length === 0){ alert('Add at least one step before starting.'); return; }
     const now = Date.now();
-    const baselineFinish = now + tasks.reduce((s,t)=>s+estimateFor(t),0)*60000;
+    const baselineFinish = now + tasks.reduce((s,t)=>s+plannedMinFor(t),0)*60000;
     today = {
       dateStr: todayStr(),
       status: 'active',
@@ -275,12 +266,12 @@
     const currentTask = inRoutine ? tasks[idx] : null;
     const currentElapsedMs = inRoutine ? (now - today.currentTaskStart) : 0;
     const remaining = inRoutine ? tasks.slice(idx+1) : [];
-    const remainingEstMs = remaining.reduce((s,t)=> s + estimateFor(t)*60000, 0);
+    const remainingEstMs = remaining.reduce((s,t)=> s + plannedMinFor(t)*60000, 0);
     // Time still owed on the CURRENT step: its full planned duration until you've
     // actually used it up, then zero (at which point overrun shows up naturally
     // because "now" itself has moved past the plan).
     const currentRemainingMs = inRoutine
-      ? Math.max(0, estimateFor(currentTask)*60000 - currentElapsedMs)
+      ? Math.max(0, plannedMinFor(currentTask)*60000 - currentElapsedMs)
       : 0;
     const projectedFinishMs = now + currentRemainingMs + remainingEstMs;
 
@@ -303,7 +294,7 @@
     if(inRoutine){
       document.getElementById('currentTaskName').textContent = currentTask.name;
       document.getElementById('currentElapsed').textContent = fmtMMSS(currentElapsedMs);
-      const plannedMin = estimateFor(currentTask);
+      const plannedMin = plannedMinFor(currentTask);
       document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
       const over = currentElapsedMs - plannedMin*60000;
       const noteEl = document.getElementById('paceNote');
@@ -330,7 +321,7 @@
       upcomingList.appendChild(li);
     } else {
       remaining.forEach(t=>{
-        const est = estimateFor(t);
+        const est = plannedMinFor(t);
         const li = document.createElement('li');
         li.className = 'chain-item';
         li.innerHTML = `<span class="name">${escapeAttr(t.name)}</span><span class="time">~${Math.round(est)} min · by ${fmtClock(cursor+est*60000)}</span>`;
@@ -373,14 +364,10 @@
     if(idx >= tasks.length) return;
     const task = tasks[idx];
     const actualMin = Math.max(0, (now - today.currentTaskStart)/60000);
-    const plannedMin = estimateFor(task);
+    const plannedMin = plannedMinFor(task);
 
     if(!skip){
       today.completedLog.push({ taskId: task.id, name: task.name, actualMin, plannedMin, skipped:false });
-      if(!history[task.id]) history[task.id] = [];
-      history[task.id].push(actualMin);
-      if(history[task.id].length > 7) history[task.id] = history[task.id].slice(-7);
-      await persistHistory();
     } else {
       today.completedLog.push({ taskId: task.id, name: task.name, actualMin: 0, plannedMin, skipped:true });
     }
