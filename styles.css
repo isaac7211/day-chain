@@ -15,6 +15,7 @@
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
+html{ background: var(--bg); }
 body{
   background: radial-gradient(ellipse 120% 80% at 50% -10%, #26302b 0%, var(--bg) 55%);
   color: var(--text);
@@ -26,7 +27,7 @@ body{
 #app{
   width:100%;
   max-width: 480px;
-  padding: 20px 18px 48px;
+  padding: calc(20px + env(safe-area-inset-top)) 18px 48px;
   min-height:100vh;
 }
 header{
