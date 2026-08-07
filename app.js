@@ -140,6 +140,36 @@
     document.getElementById('summaryLabel').textContent = copy.summaryLabel;
   }
 
+  // ---------- WAKE LOCK ----------
+  // Keeps the screen on while a routine is actively running, the same way a
+  // video keeps the screen awake during playback. Only requested while the
+  // active screen is showing, and released the moment it isn't — the browser
+  // also force-releases it whenever the tab is hidden (app backgrounded,
+  // screen locked), so it's re-requested on visibilitychange if a routine is
+  // still active when the tab comes back.
+  let wakeLock = null;
+
+  async function requestWakeLock(){
+    if(!('wakeLock' in navigator) || wakeLock) return;
+    try{
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', ()=>{ wakeLock = null; });
+    }catch(e){
+      console.error('wake lock request failed', e);
+    }
+  }
+  async function releaseWakeLock(){
+    if(!wakeLock) return;
+    const lock = wakeLock;
+    wakeLock = null;
+    try{ await lock.release(); }catch(e){}
+  }
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'visible' && today && today.status === 'active'){
+      requestWakeLock();
+    }
+  });
+
   // ---------- render router ----------
   function showScreen(id){
     ['screen-setup','screen-active','screen-summary','screen-history'].forEach(s=>{
@@ -153,14 +183,17 @@
       renderActive();
       showScreen('screen-active');
       if(!tickHandle) tickHandle = setInterval(renderActive, 1000);
+      requestWakeLock();
     } else if(today && today.status === 'summary'){
       renderSummary();
       showScreen('screen-summary');
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+      releaseWakeLock();
     } else {
       renderSetup();
       showScreen('screen-setup');
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+      releaseWakeLock();
     }
   }
 
@@ -598,6 +631,7 @@
       docRef = null;
       docCache = null;
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+      releaseWakeLock();
 
       document.getElementById('appShell').hidden = true;
       document.getElementById('screen-signin').hidden = false;
