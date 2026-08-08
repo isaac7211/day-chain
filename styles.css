@@ -174,7 +174,7 @@ header{
   margin-bottom:16px;
 }
 .timer-elapsed{ font-size: 30px; font-weight:600; font-variant-numeric: tabular-nums; }
-.timer-planned{ font-size: 14px; color: var(--text-faint); }
+.timer-planned{ font-size: 24px; font-weight:500; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .pace-note{ font-size:13px; margin-bottom:16px; }
 .pace-note.over{ color: var(--coral); }
 .pace-note.under{ color: var(--sage); }
