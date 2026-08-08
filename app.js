@@ -87,6 +87,12 @@
     catch(e){ console.error('firestore set failed', field, e); }
   }
 
+  // iOS Safari won't apply :active styles on a quick tap unless some element
+  // on the page has a touchstart listener — this is that listener. It does
+  // nothing itself; its only job is to make CSS :active (tap feedback on
+  // buttons) actually show up on iPhone.
+  document.addEventListener('touchstart', function(){}, { passive: true });
+
   function uid(){ return 't' + Math.random().toString(36).slice(2,9); }
   function todayStr(){ return new Date().toDateString(); }
   function fmtClock(ms){
@@ -413,6 +419,15 @@
     today.currentTaskStart = now;
     await persistToday();
     renderActive();
+    // Only flash if there's still a next step showing — renderActive() above
+    // may have already moved us on to the summary screen (routine finished),
+    // in which case the current-task card isn't visible anymore.
+    if(today.status === 'active'){
+      const card = document.querySelector('.current-task');
+      card.classList.remove('step-advance');
+      void card.offsetWidth; // restart the animation even if it's already running
+      card.classList.add('step-advance');
+    }
   }
 
   document.getElementById('doneBtn').addEventListener('click', ()=> markDone(false));

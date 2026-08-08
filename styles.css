@@ -167,6 +167,14 @@ header{
   font-weight:500;
   margin-bottom: 12px;
 }
+@keyframes stepAdvance{
+  0%{ background: var(--amber-dim); border-color: var(--amber); }
+  100%{ background: var(--surface); border-color: var(--border); }
+}
+.current-task.step-advance{ animation: stepAdvance 0.7s ease-out; }
+@media (prefers-reduced-motion: reduce){
+  .current-task.step-advance{ animation: none; }
+}
 .timer-row{
   display:flex;
   align-items:baseline;
@@ -189,10 +197,11 @@ button{
   padding: 13px 18px;
   -webkit-tap-highlight-color: transparent;
 }
-.btn-primary{ background: var(--amber); color:#241a0d; flex:1; }
-.btn-primary:active{ transform: scale(0.98); }
-.btn-ghost{ background: transparent; color: var(--text-dim); border:1px solid var(--border); }
+.btn-primary{ background: var(--amber); color:#241a0d; flex:1; transition: filter 0.1s, transform 0.1s; }
+.btn-primary:active{ filter: brightness(0.82); transform: scale(0.97); }
+.btn-ghost{ background: transparent; color: var(--text-dim); border:1px solid var(--border); transition: background 0.1s, transform 0.1s; }
 .btn-ghost:hover{ color: var(--text); }
+.btn-ghost:active{ background: var(--surface-2); transform: scale(0.97); }
 .btn-small{ padding: 9px 14px; font-size:13px; }
 
 /* CHAIN LISTS */
