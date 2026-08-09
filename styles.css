@@ -216,6 +216,13 @@ ul{ list-style:none; margin:0; padding:0; }
 .completed-item .diff.under{ color: var(--sage); }
 .completed-item .diff.even{ color: var(--text-faint); }
 
+.keep-awake-status{
+  text-align:center;
+  font-size:11px;
+  color: var(--text-faint);
+  margin: 10px 0 4px;
+}
+
 #endBtn{ width:100%; margin-top: 6px; }
 
 /* SETUP SCREEN */
