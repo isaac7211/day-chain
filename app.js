@@ -14,77 +14,66 @@
   const auth = firebase.auth();
   const db = firebase.firestore();
 
-  // Two independent routines share this app: 'morning' (the original) and
-  // 'night'. Morning keeps using the original unprefixed field names below
-  // so existing data needs no migration; night's fields are prefixed.
-  let currentRoutine = 'morning'; // 'morning' | 'night'
-
-  const DEFAULT_TASKS_BY_ROUTINE = {
-    morning: [
-      {id:'t1', name:'Wake up', baseEst:10},
-      {id:'t2', name:'Get out of bed', baseEst:20},
-      {id:'t3', name:'Warm up stretch', baseEst:10},
-      {id:'t4', name:'Exercise', baseEst:40},
-      {id:'t5', name:'Cool down', baseEst:15},
-      {id:'t6', name:'Make breakfast', baseEst:15},
-      {id:'t7', name:'Eat breakfast', baseEst:30},
-      {id:'t8', name:'Brush teeth & biz', baseEst:10},
-      {id:'t9', name:'Shower', baseEst:40},
-      {id:'t10', name:'Prep for work', baseEst:10},
-    ],
-    night: [], // no assumed steps — built from scratch via "+ Add step"
-  };
-  const DEFAULT_SETTINGS_BY_ROUTINE = {
-    morning: { targetTime: '11:00' },
-    night: { targetTime: '22:30' },
-  };
-  const ROUTINE_COPY = {
-    morning: {
-      targetLabel: 'Target work-start time',
-      eyebrow: 'Projected work-start',
-      startBtn: "I'm up — start the chain",
-      summaryLabel: 'This morning',
-    },
-    night: {
-      targetLabel: 'Target lights-out time',
-      eyebrow: 'Projected lights-out',
-      startBtn: 'Time to wind down — start the chain',
-      summaryLabel: 'Tonight',
-    },
-  };
-
+  // ---------- data model ----------
+  // Every routine lives in the `routines` array (one Firestore field on the
+  // single per-user doc): { id, name, targetLabel, targetTime, tasks, today, days }.
+  // `tasks`/`settings`/`routineName`/`today` below are a "working copy" of
+  // whichever routine is currently open (activeRoutineId) — kept in sync with
+  // its entry in `routines` on load/save. This lets renderSetup/renderActive/
+  // renderSummary/markDone/finishRoutine read/write them exactly as before;
+  // only the load/save/navigation layer needed to change for multi-routine
+  // support.
+  let routines = [];
+  let activeRoutineId = null;
   let tasks = [];
-  let settings = { ...DEFAULT_SETTINGS_BY_ROUTINE.morning };
+  let settings = { targetTime: '', targetLabel: '' };
+  let routineName = '';
   let today = null; // active routine state
   let tickHandle = null;
+  let deleteRoutineState = 'idle'; // 'idle' | 'confirm'
 
   // ---------- storage helpers (Firestore, one doc per signed-in user) ----------
   // docRef/docCache are only ever set after auth resolves (see the
-  // onAuthStateChanged handler at the bottom), so sGet/sSet can't run before
+  // onAuthStateChanged handler at the bottom), so nothing here can run before
   // sign-in completes — the app UI itself stays hidden until then too.
   let docRef = null;
   let docCache = null;
 
-  // Storage keys used throughout the app are prefixed ("daychain:tasks"),
-  // but they're stored as bare fields ("tasks") on the single Firestore doc —
-  // "night_tasks" etc. when the night routine is active, so both routines'
-  // data lives side by side without colliding.
-  function fieldNameForKey(key){
-    const bare = key.startsWith('daychain:') ? key.slice('daychain:'.length) : key;
-    return currentRoutine === 'night' ? ('night_' + bare) : bare;
+  function getActiveRoutine(){
+    return routines.find(r => r.id === activeRoutineId) || null;
   }
 
-  async function sGet(key){
-    if(!docCache) return null;
-    const field = fieldNameForKey(key);
-    return (field in docCache) ? docCache[field] : null;
+  function loadWorkingStateFrom(r){
+    activeRoutineId = r.id;
+    tasks = r.tasks;
+    settings = { targetTime: r.targetTime, targetLabel: r.targetLabel };
+    routineName = r.name;
+    today = r.today;
   }
-  async function sSet(key, val){
+
+  async function persistRoutines(){
     if(!docRef) return;
-    const field = fieldNameForKey(key);
-    docCache[field] = val;
-    try{ await docRef.set({ [field]: val }, { merge: true }); }
-    catch(e){ console.error('firestore set failed', field, e); }
+    docCache.routines = routines;
+    try{ await docRef.set({ routines }, { merge: true }); }
+    catch(e){ console.error('firestore set failed', 'routines', e); }
+  }
+  async function persistActiveRoutineId(){
+    if(!docRef) return;
+    docCache.activeRoutineId = activeRoutineId;
+    try{ await docRef.set({ activeRoutineId }, { merge: true }); }
+    catch(e){ console.error('firestore set failed', 'activeRoutineId', e); }
+  }
+  // Writes the working copy (tasks/settings/name/today) back into the open
+  // routine's entry in `routines`, then persists the whole array.
+  async function saveActiveRoutine(){
+    const r = getActiveRoutine();
+    if(!r) return;
+    r.tasks = tasks;
+    r.targetTime = settings.targetTime;
+    r.targetLabel = settings.targetLabel;
+    r.name = routineName;
+    r.today = today;
+    await persistRoutines();
   }
 
   // iOS Safari won't apply :active styles on a quick tap unless some element
@@ -111,39 +100,59 @@
     return task.baseEst;
   }
   function targetMsForToday(){
-    const [hh,mm] = (settings.targetTime || '11:00').split(':').map(Number);
+    const [hh,mm] = (settings.targetTime || '09:00').split(':').map(Number);
     // Anchor to the calendar day the active routine started, not "right
-    // now" — a night routine can still be running past midnight, and its
-    // target belongs to the evening it began, not to the new date.
+    // now" — a routine can still be running past midnight, and its target
+    // belongs to the evening/morning it began, not to the new date.
     const base = (today && today.startTime) ? new Date(today.startTime) : new Date();
     const d = new Date(base);
     d.setHours(hh, mm, 0, 0);
     return d.getTime();
   }
-
-  // ---------- load ----------
-  async function load(){
-    tasks = (await sGet('daychain:tasks')) || DEFAULT_TASKS_BY_ROUTINE[currentRoutine].map(t=>({...t}));
-    settings = (await sGet('daychain:settings')) || {...DEFAULT_SETTINGS_BY_ROUTINE[currentRoutine]};
-    const savedToday = await sGet('daychain:today');
-    // The night routine stays "in progress" across midnight; morning still
-    // only resumes if it was started earlier the same calendar day.
-    const sameDayRequired = currentRoutine !== 'night';
-    if(savedToday && savedToday.status === 'active' && (!sameDayRequired || savedToday.dateStr === todayStr())){
-      today = savedToday;
-    } else {
-      today = null;
-    }
+  function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+  function updateDateLabel(){
     document.getElementById('dateLabel').textContent =
       new Date().toLocaleDateString(undefined, {weekday:'long', month:'short', day:'numeric'});
   }
 
-  function applyRoutineCopy(){
-    const copy = ROUTINE_COPY[currentRoutine];
-    document.getElementById('targetTimeLabel').textContent = copy.targetLabel;
-    document.getElementById('startBtn').textContent = copy.startBtn;
-    document.getElementById('heroEyebrow').textContent = copy.eyebrow;
-    document.getElementById('summaryLabel').textContent = copy.summaryLabel;
+  // ---------- ONE-TIME MIGRATION ----------
+  // Pre-multi-routine data lived as flat fields on the doc: tasks/settings/
+  // today/days for the old "morning" routine, night_tasks/night_settings/
+  // night_today/night_days for "night", plus activeRoutine ('morning'|
+  // 'night'). If `routines` doesn't exist yet, build it from whatever of
+  // those fields are present. Old fields are left in place, untouched —
+  // this only ever reads them, never deletes them.
+  function buildRoutineFromLegacyFields(prefix, name, targetLabel, defaultTargetTime){
+    const legacyTasks = docCache[prefix + 'tasks'];
+    const legacySettings = docCache[prefix + 'settings'];
+    const legacyToday = docCache[prefix + 'today'];
+    const legacyDays = docCache[prefix + 'days'] || [];
+    const hasLegacyData = !!(legacyTasks || legacySettings || legacyToday || legacyDays.length);
+    if(!hasLegacyData) return null;
+    const id = uid();
+    const days = legacyDays.map(d => ({ ...d, routineId: id, routineName: name }));
+    return {
+      id, name, targetLabel,
+      targetTime: (legacySettings && legacySettings.targetTime) || defaultTargetTime,
+      tasks: legacyTasks || [],
+      today: legacyToday || null,
+      days
+    };
+  }
+
+  function migrateLegacyDataIfNeeded(){
+    if(docCache.routines) return false; // already migrated (or a fresh routines list)
+    const built = [];
+    const morning = buildRoutineFromLegacyFields('', 'Morning Workout Routine', 'Work start', '11:00');
+    if(morning) built.push(morning);
+    const night = buildRoutineFromLegacyFields('night_', 'Evening Routine', 'Lights out', '22:30');
+    if(night) built.push(night);
+    routines = built;
+    const preferred = docCache.activeRoutine === 'night' ? night : morning;
+    activeRoutineId = (preferred || routines[0] || {}).id || null;
+    docCache.routines = routines;
+    docCache.activeRoutineId = activeRoutineId;
+    return true; // caller needs to write this back
   }
 
   // ---------- WAKE LOCK ----------
@@ -178,13 +187,17 @@
 
   // ---------- render router ----------
   function showScreen(id){
-    ['screen-setup','screen-active','screen-summary','screen-history'].forEach(s=>{
+    ['screen-routines','screen-setup','screen-active','screen-summary','screen-history'].forEach(s=>{
       document.getElementById(s).hidden = (s !== id);
     });
+    // The header's "Edit" pill only makes sense once a specific routine is
+    // open and not already being edited.
+    document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup');
   }
 
   function renderAll(){
-    applyRoutineCopy();
+    if(!activeRoutineId){ showRoutineList(); return; }
+    applyRoutineHeroCopy();
     if(today && today.status === 'active'){
       renderActive();
       showScreen('screen-active');
@@ -203,8 +216,105 @@
     }
   }
 
+  function applyRoutineHeroCopy(){
+    document.getElementById('heroEyebrow').textContent = `Projected ${settings.targetLabel || 'target'}`;
+    document.getElementById('summaryLabel').textContent = routineName || 'Summary';
+  }
+
+  // ---------- ROUTINE LIST screen ----------
+  function routineSortKey(r){
+    if(r.today && r.today.startTime) return r.today.startTime;
+    if(r.days && r.days.length) return r.days[0].startTime;
+    return 0;
+  }
+
+  function showRoutineList(){
+    if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
+    releaseWakeLock();
+    activeRoutineId = null;
+    document.getElementById('newRoutineChooser').hidden = true;
+    renderRoutineList();
+    showScreen('screen-routines');
+  }
+
+  function renderRoutineList(){
+    const list = document.getElementById('routineList');
+    list.innerHTML = '';
+    const sorted = [...routines].sort((a,b) => routineSortKey(b) - routineSortKey(a));
+    if(sorted.length === 0){
+      const li = document.createElement('li');
+      li.className = 'hist-empty';
+      li.textContent = 'No routines yet — create your first one below.';
+      list.appendChild(li);
+    }
+    sorted.forEach(r => {
+      const total = r.tasks.reduce((s,t) => s + t.baseEst, 0);
+      const li = document.createElement('li');
+      li.className = 'routine-list-item';
+      li.innerHTML = `<span class="name">${escapeAttr(r.name)}</span><span class="time">${Math.round(total)} min</span>`;
+      li.addEventListener('click', () => openRoutine(r.id));
+      list.appendChild(li);
+    });
+    renderDuplicateChooserList();
+  }
+
+  function duplicateRoutineObj(src){
+    return {
+      id: uid(),
+      name: src.name + ' copy',
+      targetLabel: src.targetLabel,
+      targetTime: src.targetTime,
+      tasks: src.tasks.map(t => ({ id: uid(), name: t.name, baseEst: t.baseEst })),
+      today: null,
+      days: []
+    };
+  }
+  function createBlankRoutineObj(){
+    return { id: uid(), name: 'New routine', targetLabel: 'Target time', targetTime: '09:00', tasks: [], today: null, days: [] };
+  }
+  async function addRoutineAndOpen(r){
+    routines.push(r);
+    await persistRoutines();
+    openRoutine(r.id);
+  }
+
+  function renderDuplicateChooserList(){
+    const list = document.getElementById('duplicateChooserList');
+    list.innerHTML = '';
+    routines.forEach(r => {
+      const li = document.createElement('li');
+      li.className = 'routine-list-item';
+      li.innerHTML = `<span class="name">${escapeAttr(r.name)}</span>`;
+      li.addEventListener('click', () => addRoutineAndOpen(duplicateRoutineObj(r)));
+      list.appendChild(li);
+    });
+  }
+
+  document.getElementById('newRoutineBtn').addEventListener('click', () => {
+    const chooser = document.getElementById('newRoutineChooser');
+    chooser.hidden = !chooser.hidden;
+  });
+  document.getElementById('newRoutineBlankBtn').addEventListener('click', () => {
+    addRoutineAndOpen(createBlankRoutineObj());
+  });
+
+  function openRoutine(id){
+    const r = routines.find(x => x.id === id);
+    if(!r) return;
+    loadWorkingStateFrom(r);
+    deleteRoutineState = 'idle';
+    persistActiveRoutineId();
+    renderAll();
+  }
+  document.getElementById('backToRoutinesBtn').addEventListener('click', () => {
+    showRoutineList();
+  });
+
   // ---------- SETUP screen ----------
   function renderSetup(){
+    document.getElementById('routineNameInput').value = routineName;
+    document.getElementById('targetLabelInput').value = settings.targetLabel;
+
     const list = document.getElementById('taskEditList');
     list.innerHTML = '';
     tasks.forEach((t, idx) => {
@@ -251,6 +361,7 @@
     }));
 
     document.getElementById('targetTimeInput').value = settings.targetTime;
+    renderDeleteRoutineSection();
     updateSetupPreview();
   }
 
@@ -268,11 +379,16 @@
       `Start by <b>${fmtClock(startByMs)}</b> to hit your target.`;
   }
 
-  function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+  async function persistTasks(){ await saveActiveRoutine(); }
 
-  async function persistTasks(){ await sSet('daychain:tasks', tasks); }
-  async function persistSettings(){ await sSet('daychain:settings', settings); }
-  async function persistToday(){ await sSet('daychain:today', today); }
+  document.getElementById('routineNameInput').addEventListener('input', e=>{
+    routineName = e.target.value;
+  });
+  document.getElementById('routineNameInput').addEventListener('blur', persistTasks);
+  document.getElementById('targetLabelInput').addEventListener('input', e=>{
+    settings.targetLabel = e.target.value;
+  });
+  document.getElementById('targetLabelInput').addEventListener('blur', persistTasks);
 
   document.getElementById('addTaskBtn').addEventListener('click', ()=>{
     tasks.push({id: uid(), name:'New step', baseEst:10});
@@ -280,7 +396,7 @@
   });
   document.getElementById('targetTimeInput').addEventListener('change', e=>{
     settings.targetTime = e.target.value;
-    persistSettings(); updateSetupPreview();
+    persistTasks(); updateSetupPreview();
   });
   document.getElementById('startBtn').addEventListener('click', async ()=>{
     if(tasks.length === 0){ alert('Add at least one step before starting.'); return; }
@@ -295,9 +411,53 @@
       baselineFinish: baselineFinish,
       completedLog: []
     };
-    await persistToday();
+    await persistTasks();
     renderAll();
   });
+
+  // ---------- ROUTINE MANAGEMENT (duplicate/delete) ----------
+  document.getElementById('duplicateRoutineBtn').addEventListener('click', () => {
+    const src = getActiveRoutine();
+    if(src) addRoutineAndOpen(duplicateRoutineObj(src));
+  });
+  document.getElementById('deleteRoutineBtn').addEventListener('click', () => {
+    deleteRoutineState = 'confirm';
+    renderDeleteRoutineSection();
+  });
+  function renderDeleteRoutineSection(){
+    const section = document.getElementById('deleteRoutineConfirm');
+    section.innerHTML = '';
+    if(deleteRoutineState !== 'confirm'){
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+    const warning = document.createElement('div');
+    warning.className = 'delete-warning';
+    warning.textContent = `Delete "${routineName}" and all its history? This can't be undone.`;
+    section.appendChild(warning);
+
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn-ghost';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', ()=>{ deleteRoutineState = 'idle'; renderDeleteRoutineSection(); });
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn-primary danger-btn';
+    confirmBtn.textContent = 'Delete routine';
+    confirmBtn.addEventListener('click', deleteActiveRoutine);
+    row.appendChild(cancelBtn);
+    row.appendChild(confirmBtn);
+    section.appendChild(row);
+  }
+  async function deleteActiveRoutine(){
+    const id = activeRoutineId;
+    routines = routines.filter(r => r.id !== id);
+    deleteRoutineState = 'idle';
+    await persistRoutines();
+    showRoutineList();
+  }
 
   // ---------- ACTIVE screen ----------
   function renderActive(){
@@ -417,7 +577,7 @@
 
     today.currentIndex += 1;
     today.currentTaskStart = now;
-    await persistToday();
+    await saveActiveRoutine();
     renderActive();
     // Only flash if there's still a next step showing — renderActive() above
     // may have already moved us on to the summary screen (routine finished),
@@ -437,10 +597,9 @@
     if(today && today.status === 'active'){
       const ok = confirm('Editing your steps will end the current routine. Continue?');
       if(!ok) return;
-      today.status = null;
-      await sSet('daychain:today', null);
-      today = null;
     }
+    today = null;
+    await saveActiveRoutine();
     renderAll();
   });
 
@@ -448,21 +607,24 @@
     if(!today || today.status !== 'active') return;
     today.status = 'summary';
     today.finishTime = Date.now();
-    await persistToday();
 
-    const days = (await sGet('daychain:days')) || [];
+    const r = getActiveRoutine();
+    const days = r.days || [];
     days.unshift({
       dateStr: today.dateStr,
       startTime: today.startTime,
       finishTime: today.finishTime,
+      routineId: r.id,
+      routineName: r.name,
       entries: today.completedLog.map(e => ({
         taskId: e.taskId, name: e.name, plannedMin: e.plannedMin,
         actualMin: e.actualMin, skipped: !!e.skipped
       }))
     });
     if(days.length > 60) days.length = 60;
-    await sSet('daychain:days', days);
+    r.days = days;
 
+    await saveActiveRoutine();
     renderAll();
   }
 
@@ -494,37 +656,64 @@
 
   document.getElementById('newDayBtn').addEventListener('click', async ()=>{
     today = null;
-    await sSet('daychain:today', null);
+    await saveActiveRoutine();
     renderAll();
   });
 
   // ---------- HISTORY screen ----------
-  document.getElementById('historyBtn').addEventListener('click', async ()=>{
-    await renderHistory();
+  const MAX_HISTORY_COLUMNS = 14;
+
+  function routinesWithHistory(){
+    return routines.filter(r => r.days && r.days.length > 0);
+  }
+
+  function populateHistoryRoutineSelect(){
+    const sel = document.getElementById('historyRoutineSelect');
+    const withHistory = routinesWithHistory();
+    sel.innerHTML = '';
+    if(withHistory.length === 0){ sel.hidden = true; return null; }
+    sel.hidden = false;
+    withHistory.forEach(r=>{
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = r.name;
+      sel.appendChild(opt);
+    });
+    const preferred = withHistory.find(r => r.id === activeRoutineId) ? activeRoutineId : withHistory[0].id;
+    sel.value = preferred;
+    return preferred;
+  }
+
+  document.getElementById('historyBtn').addEventListener('click', ()=>{
+    const routineId = populateHistoryRoutineSelect();
+    renderHistoryTable(routineId);
     showScreen('screen-history');
+  });
+  document.getElementById('historyRoutineSelect').addEventListener('change', e=>{
+    renderHistoryTable(e.target.value);
   });
   document.getElementById('historyBackBtn').addEventListener('click', ()=>{
     renderAll();
   });
 
-  const MAX_HISTORY_COLUMNS = 14;
-
-  async function renderHistory(){
-    const allDays = (await sGet('daychain:days')) || [];
-    const days = allDays.slice(0, MAX_HISTORY_COLUMNS);
+  function renderHistoryTable(routineId){
     const container = document.getElementById('historyContent');
+    const r = routines.find(x => x.id === routineId);
+    const allDays = (r && r.days) || [];
 
-    if(allDays.length === 0){
+    if(!r || allDays.length === 0){
       container.innerHTML = `<div class="hist-empty">No finished routines yet — this fills in after you complete your first one.</div>`;
       return;
     }
+
+    const days = allDays.slice(0, MAX_HISTORY_COLUMNS);
 
     // Build row order: current tasks first (in their current order), then any
     // historical steps that no longer exist in the current list, in the order
     // they were first encountered. Scanned across ALL stored days (not just
     // the displayed columns) so low/high/avg reflect full history.
-    const rowKeys = tasks.map(t => ({ taskId: t.id, label: t.name }));
-    const knownIds = new Set(rowKeys.map(r => r.taskId));
+    const rowKeys = r.tasks.map(t => ({ taskId: t.id, label: t.name }));
+    const knownIds = new Set(rowKeys.map(x => x.taskId));
     allDays.forEach(day => {
       day.entries.forEach(e => {
         if(!knownIds.has(e.taskId)){
@@ -537,7 +726,7 @@
     let html = `<div class="hist-wrap"><table class="hist-table"><thead><tr><th>Step</th>`;
     days.forEach(day => {
       const label = new Date(day.startTime).toLocaleDateString(undefined, {month:'short', day:'numeric'});
-      html += `<th>${escapeAttr(label)}</th>`;
+      html += `<th>${escapeAttr(label)} <button class="del-day-btn" data-starttime="${day.startTime}" title="Delete this day">✕</button></th>`;
     });
     html += `<th class="stat-sep">Low</th><th>High</th><th>Avg</th>`;
     html += `</tr></thead><tbody>`;
@@ -580,8 +769,21 @@
     });
 
     html += `</tbody></table></div>`;
-    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Low/High/Avg are actual minutes across your full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
+    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Low/High/Avg are actual minutes across this routine's full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
     container.innerHTML = html;
+
+    container.querySelectorAll('.del-day-btn').forEach(btn=>{
+      btn.addEventListener('click', async (e)=>{
+        e.stopPropagation();
+        const ok = confirm("Delete this day's record? This can't be undone.");
+        if(!ok) return;
+        const st = Number(btn.dataset.starttime);
+        r.days = (r.days || []).filter(d => d.startTime !== st);
+        await persistRoutines();
+        const stillHasHistory = populateHistoryRoutineSelect();
+        renderHistoryTable(stillHasHistory);
+      });
+    });
   }
 
   // ---------- AUTH ----------
@@ -609,42 +811,47 @@
     }
   });
 
-  // ---------- ROUTINE SWITCH ----------
-  function updateRoutineSwitchUI(){
-    document.getElementById('tabMorning').classList.toggle('active', currentRoutine === 'morning');
-    document.getElementById('tabNight').classList.toggle('active', currentRoutine === 'night');
+  function findResumeRoutine(){
+    const candidates = routines.filter(r => r.today && (r.today.status === 'active' || r.today.status === 'summary'));
+    if(!candidates.length) return null;
+    candidates.sort((a,b) => (b.today.startTime||0) - (a.today.startTime||0));
+    return candidates[0];
   }
-
-  document.getElementById('routineSwitch').addEventListener('click', async (e)=>{
-    const btn = e.target.closest('.routine-tab');
-    if(!btn || btn.dataset.routine === currentRoutine) return;
-    currentRoutine = btn.dataset.routine;
-    updateRoutineSwitchUI();
-    // "activeRoutine" is doc-level metadata (which routine to show), not
-    // per-routine data, so it's written directly rather than through
-    // sSet/fieldNameForKey.
-    docCache.activeRoutine = currentRoutine;
-    docRef.set({ activeRoutine: currentRoutine }, { merge: true }).catch(e=>console.error('save active routine failed', e));
-    await load();
-    renderAll();
-  });
 
   auth.onAuthStateChanged(async (user)=>{
     if(user){
       docRef = db.collection('users').doc(user.uid).collection('appdata').doc('daychain');
       const snap = await docRef.get();
       docCache = snap.exists ? snap.data() : {};
-      currentRoutine = (docCache.activeRoutine === 'night') ? 'night' : 'morning';
-      updateRoutineSwitchUI();
+
+      const needsMigrationWrite = migrateLegacyDataIfNeeded();
+      if(!needsMigrationWrite){
+        routines = docCache.routines || [];
+        activeRoutineId = docCache.activeRoutineId || null;
+        if(activeRoutineId && !routines.find(r => r.id === activeRoutineId)) activeRoutineId = null;
+      }
+      if(needsMigrationWrite){
+        await docRef.set({ routines, activeRoutineId }, { merge: true })
+          .catch(e => console.error('migration write failed', e));
+      }
 
       document.getElementById('screen-signin').hidden = true;
       document.getElementById('appShell').hidden = false;
+      updateDateLabel();
 
-      await load();
-      renderAll();
+      const resumeTarget = findResumeRoutine();
+      if(resumeTarget){
+        loadWorkingStateFrom(resumeTarget);
+        persistActiveRoutineId();
+        renderAll();
+      } else {
+        showRoutineList();
+      }
     } else {
       docRef = null;
       docCache = null;
+      routines = [];
+      activeRoutineId = null;
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
       releaseWakeLock();
 

@@ -45,13 +45,31 @@
       </div>
     </header>
 
-    <div class="routine-switch" id="routineSwitch">
-      <button class="routine-tab active" id="tabMorning" data-routine="morning">Morning</button>
-      <button class="routine-tab" id="tabNight" data-routine="night">Night</button>
-    </div>
+    <!-- ROUTINE LIST SCREEN -->
+    <main id="screen-routines">
+      <div class="card">
+        <div class="label">Your routines</div>
+        <ul id="routineList"></ul>
+      </div>
+      <div class="card">
+        <button class="add-task-btn" id="newRoutineBtn">+ New routine</button>
+        <div id="newRoutineChooser" hidden>
+          <button class="btn-ghost" id="newRoutineBlankBtn" style="width:100%; margin-top:12px;">Start blank</button>
+          <div class="label" style="margin-top:16px;">Or duplicate an existing routine</div>
+          <ul id="duplicateChooserList"></ul>
+        </div>
+      </div>
+    </main>
 
     <!-- SETUP SCREEN -->
-    <main id="screen-setup">
+    <main id="screen-setup" hidden>
+      <button class="btn-ghost btn-small" id="backToRoutinesBtn">← All routines</button>
+
+      <div class="card">
+        <div class="label">Routine name</div>
+        <input type="text" id="routineNameInput" class="routine-name-input" placeholder="Routine name">
+      </div>
+
       <div class="card">
         <div class="label">Your routine</div>
         <ul id="taskEditList"></ul>
@@ -60,7 +78,7 @@
 
       <div class="card">
         <div class="settings-row">
-          <label id="targetTimeLabel">Target work-start time</label>
+          <input type="text" id="targetLabelInput" class="target-label-input" placeholder="Target label">
           <input type="time" id="targetTimeInput">
         </div>
         <div class="preview-line" id="startByPreview"></div>
@@ -68,14 +86,23 @@
         <div class="total-line" id="setupTotal"></div>
       </div>
 
-      <button class="btn-primary" id="startBtn">I'm up — start the chain</button>
+      <button class="btn-primary" id="startBtn">Start the chain</button>
+
+      <div class="card">
+        <div class="label">Manage this routine</div>
+        <div class="manage-row">
+          <button class="btn-ghost" id="duplicateRoutineBtn">Duplicate</button>
+          <button class="btn-ghost danger-ghost" id="deleteRoutineBtn">Delete</button>
+        </div>
+        <div class="delete-section" id="deleteRoutineConfirm" hidden></div>
+      </div>
     </main>
 
     <!-- ACTIVE SCREEN -->
     <main id="screen-active" hidden>
 
       <div class="hero">
-        <div class="eyebrow" id="heroEyebrow">Projected work-start</div>
+        <div class="eyebrow" id="heroEyebrow">Projected target</div>
         <div class="hero-time" id="projectedTime">—</div>
         <div class="delta-badge" id="deltaBadge">—</div>
       </div>
@@ -110,7 +137,7 @@
     <!-- SUMMARY SCREEN -->
     <main id="screen-summary" hidden>
       <div class="card">
-        <div class="label" id="summaryLabel">This morning</div>
+        <div class="label" id="summaryLabel">Summary</div>
         <div class="hero-time" id="summaryFinish" style="font-size:38px;text-align:left;margin-bottom:4px;"></div>
         <div class="preview-line" id="summaryVsTarget"></div>
       </div>
@@ -125,6 +152,7 @@
     <main id="screen-history" hidden>
       <div class="card">
         <div class="label">Your routine, day by day</div>
+        <select id="historyRoutineSelect" class="history-routine-select" hidden></select>
         <div id="historyContent"></div>
       </div>
       <button class="btn-ghost" id="historyBackBtn" style="width:100%;">Back</button>

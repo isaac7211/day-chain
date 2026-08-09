@@ -66,27 +66,6 @@ header{
   stroke: currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round;
 }
 
-.routine-switch{
-  display:flex;
-  gap:4px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 4px;
-  margin-bottom: 18px;
-}
-.routine-tab{
-  flex:1;
-  background:transparent;
-  color: var(--text-dim);
-  border-radius: 8px;
-  padding: 9px;
-  font-size:13px;
-}
-.routine-tab.active{
-  background: var(--surface-2);
-  color: var(--text);
-}
 #settingsBtn:hover, #historyBtn:hover{ color: var(--text); }
 
 .card{
@@ -103,6 +82,20 @@ header{
   color: var(--text-faint);
   margin-bottom: 10px;
 }
+
+/* ROUTINE LIST */
+.routine-list-item{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  cursor:pointer;
+}
+.routine-list-item:last-child{ border-bottom:none; }
+.routine-list-item .name{ font-size:15px; color: var(--text); }
+.routine-list-item .time{ font-size:13px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.routine-list-item:active{ background: var(--surface-2); margin: 0 -18px; padding-left:18px; padding-right:18px; border-radius:8px; }
 
 /* HERO */
 .hero{
@@ -273,13 +266,34 @@ ul{ list-style:none; margin:0; padding:0; }
   padding: 11px;
   font-size:14px;
 }
+.routine-name-input{
+  width:100%;
+  background:transparent;
+  border:none;
+  color: var(--text);
+  font-family:'Fraunces', serif;
+  font-size: 22px;
+  font-weight:500;
+  padding: 2px;
+}
+.routine-name-input:focus{ outline:none; border-bottom: 1px solid var(--amber); }
 .settings-row{
   display:flex;
-  justify-content:space-between;
+  gap:10px;
   align-items:center;
   margin-bottom:14px;
 }
-.settings-row label{ font-size:14px; color: var(--text-dim); }
+.target-label-input{
+  flex:1;
+  min-width:0;
+  background:transparent;
+  border:none;
+  color: var(--text-dim);
+  font-size:14px;
+  font-family:'Inter',sans-serif;
+  padding: 8px 2px;
+}
+.target-label-input:focus{ outline:none; border-bottom: 1px solid var(--amber); }
 .settings-row input[type=time]{
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -288,6 +302,7 @@ ul{ list-style:none; margin:0; padding:0; }
   padding: 8px 10px;
   font-family:'Inter',sans-serif;
   font-size:14px;
+  flex-shrink:0;
 }
 .preview-line{
   font-size:13px;
@@ -298,6 +313,19 @@ ul{ list-style:none; margin:0; padding:0; }
 .total-line{ font-size:13px; color: var(--text-faint); margin-top:10px; }
 #startBtn{ width:100%; margin-top:16px; padding:15px; font-size:16px; }
 
+/* ROUTINE MANAGEMENT */
+.manage-row{ display:flex; gap:10px; }
+.danger-ghost{ color: var(--coral); border-color: rgba(210,105,79,0.35); }
+.danger-ghost:hover{ color: var(--coral); background: var(--coral-dim); }
+.delete-section{
+  margin-top:14px;
+  padding-top:14px;
+  border-top: 1px solid var(--border);
+}
+.delete-warning{ color: var(--coral); font-size:13px; margin-bottom:12px; }
+.danger-btn{ background: var(--coral); color:#2a140d; flex:1; }
+.danger-btn:active{ filter: brightness(0.82); transform: scale(0.97); }
+
 [hidden]{ display:none !important; }
 
 .summary-table{ width:100%; border-collapse: collapse; font-size:13px; }
@@ -305,6 +333,27 @@ ul{ list-style:none; margin:0; padding:0; }
 .summary-table td:last-child{ text-align:right; font-variant-numeric: tabular-nums; }
 
 /* HISTORY */
+.history-routine-select{
+  width:100%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 10px;
+  font-family:'Inter',sans-serif;
+  font-size:14px;
+  margin-bottom:14px;
+}
+.del-day-btn{
+  background:transparent;
+  border:none;
+  color: var(--text-faint);
+  font-size:11px;
+  padding: 2px 4px;
+  cursor:pointer;
+  vertical-align:middle;
+}
+.del-day-btn:hover{ color: var(--coral); }
 .hist-wrap{ overflow-x:auto; -webkit-overflow-scrolling:touch; }
 .hist-table{ border-collapse: collapse; font-size:13px; white-space:nowrap; }
 .hist-table th, .hist-table td{
