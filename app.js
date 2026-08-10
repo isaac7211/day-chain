@@ -717,7 +717,11 @@
 
   document.getElementById('doneBtn').addEventListener('click', ()=> markDone(false));
   document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
-  document.getElementById('endBtn').addEventListener('click', ()=> finishRoutine());
+  document.getElementById('endBtn').addEventListener('click', ()=>{
+    const ok = confirm('End this routine now? Steps not marked done will be left incomplete.');
+    if(!ok) return;
+    finishRoutine();
+  });
   document.getElementById('settingsBtn').addEventListener('click', async ()=>{
     if(today && today.status === 'active'){
       const ok = confirm('Editing your steps will end the current routine. Continue?');
