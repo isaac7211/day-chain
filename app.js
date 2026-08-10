@@ -110,6 +110,13 @@
     return d.getTime();
   }
   function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+  // Compact "Np" annotation for a step's paused time, wherever its actual
+  // time is already shown — blank when there was no pause, so unpaused
+  // steps look exactly as they always have.
+  function pauseSuffix(pausedMin){
+    const m = Math.round(pausedMin || 0);
+    return m > 0 ? ` · ${m}p` : '';
+  }
   function updateDateLabel(){
     document.getElementById('dateLabel').textContent =
       new Date().toLocaleDateString(undefined, {weekday:'long', month:'short', day:'numeric'});
@@ -533,6 +540,8 @@
       startTime: now,
       currentIndex: 0,
       currentTaskStart: now,
+      pausedAt: null,
+      pausedMsTotal: 0,
       baselineFinish: baselineFinish,
       completedLog: []
     };
@@ -584,6 +593,15 @@
     showRoutineList();
   }
 
+  // Total ms the CURRENT step has been paused, including an in-progress
+  // pause (pausedAt set but not yet resumed). Resets to 0 whenever the step
+  // changes — see markDone().
+  function currentStepPausedMs(){
+    let total = (today && today.pausedMsTotal) || 0;
+    if(today && today.pausedAt) total += (Date.now() - today.pausedAt);
+    return total;
+  }
+
   // ---------- ACTIVE screen ----------
   function renderActive(){
     const now = Date.now();
@@ -592,7 +610,16 @@
     // build projections
     const inRoutine = idx < tasks.length;
     const currentTask = inRoutine ? tasks[idx] : null;
+    // Wall-clock elapsed on the current step — deliberately includes any
+    // paused time, and feeds the projection below unchanged. A pause
+    // genuinely delays the rest of the day, so the projected finish should
+    // keep climbing exactly as if the step were simply running long.
     const currentElapsedMs = inRoutine ? (now - today.currentTaskStart) : 0;
+    // Active-only elapsed — wall-clock minus accumulated pause time. This is
+    // what the step's OWN displayed timer and pace comparison use, so they
+    // freeze while paused instead of racking up "over plan" time that isn't
+    // really the step's fault.
+    const activeElapsedMs = inRoutine ? Math.max(0, currentElapsedMs - currentStepPausedMs()) : 0;
     const remaining = inRoutine ? tasks.slice(idx+1) : [];
     const remainingEstMs = remaining.reduce((s,t)=> s + plannedMinFor(t)*60000, 0);
     // Time still owed on the CURRENT step: its full planned duration until you've
@@ -620,22 +647,33 @@
     }
 
     if(inRoutine){
+      const isPaused = !!today.pausedAt;
       document.getElementById('currentTaskName').textContent = currentTask.name;
-      document.getElementById('currentElapsed').textContent = fmtMMSS(currentElapsedMs);
+      const elapsedEl = document.getElementById('currentElapsed');
+      elapsedEl.textContent = fmtMMSS(activeElapsedMs);
+      elapsedEl.classList.toggle('paused', isPaused);
       const plannedMin = plannedMinFor(currentTask);
       document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
-      const over = currentElapsedMs - plannedMin*60000;
       const noteEl = document.getElementById('paceNote');
-      if(over > 60000){
-        noteEl.textContent = `${Math.round(over/60000)} min over — the rest of your chain will shift.`;
-        noteEl.className = 'pace-note over';
-      } else if(over < -60000){
-        noteEl.textContent = `${Math.round(-over/60000)} min ahead of plan on this step.`;
-        noteEl.className = 'pace-note under';
+      if(isPaused){
+        noteEl.textContent = `Paused — ${fmtMMSS(activeElapsedMs)} active so far.`;
+        noteEl.className = 'pace-note paused';
       } else {
-        noteEl.textContent = `On pace for this step.`;
-        noteEl.className = 'pace-note';
+        const over = activeElapsedMs - plannedMin*60000;
+        if(over > 60000){
+          noteEl.textContent = `${Math.round(over/60000)} min over — the rest of your chain will shift.`;
+          noteEl.className = 'pace-note over';
+        } else if(over < -60000){
+          noteEl.textContent = `${Math.round(-over/60000)} min ahead of plan on this step.`;
+          noteEl.className = 'pace-note under';
+        } else {
+          noteEl.textContent = `On pace for this step.`;
+          noteEl.className = 'pace-note';
+        }
       }
+      const pauseBtn = document.getElementById('pauseBtn');
+      pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+      pauseBtn.classList.toggle('is-paused', isPaused);
     }
 
     // upcoming list with live-computed clock times
@@ -673,7 +711,7 @@
           const diff = Math.round(e.actualMin - e.plannedMin);
           const cls = diff > 0 ? 'over' : (diff < 0 ? 'under' : 'even');
           const diffText = diff === 0 ? 'on plan' : (diff > 0 ? `+${diff} min` : `${diff} min`);
-          li.innerHTML = `<span class="name">${escapeAttr(e.name)}</span><span class="diff ${cls}">${diffText}</span>`;
+          li.innerHTML = `<span class="name">${escapeAttr(e.name)}</span><span class="diff ${cls}">${diffText}${pauseSuffix(e.pausedMin)}</span>`;
         }
         completedList.appendChild(li);
       });
@@ -691,17 +729,23 @@
     const idx = today.currentIndex;
     if(idx >= tasks.length) return;
     const task = tasks[idx];
-    const actualMin = Math.max(0, (now - today.currentTaskStart)/60000);
+    const pausedMin = currentStepPausedMs()/60000;
+    // Active minutes only — wall-clock time minus whatever was paused, so a
+    // 40-minute step with a 10-minute pause logs 30 actual minutes toward
+    // this step's rolling average, not 40.
+    const actualMin = Math.max(0, (now - today.currentTaskStart)/60000 - pausedMin);
     const plannedMin = plannedMinFor(task);
 
     if(!skip){
-      today.completedLog.push({ taskId: task.id, name: task.name, actualMin, plannedMin, skipped:false });
+      today.completedLog.push({ taskId: task.id, name: task.name, actualMin, plannedMin, pausedMin, skipped:false });
     } else {
-      today.completedLog.push({ taskId: task.id, name: task.name, actualMin: 0, plannedMin, skipped:true });
+      today.completedLog.push({ taskId: task.id, name: task.name, actualMin: 0, plannedMin, pausedMin: 0, skipped:true });
     }
 
     today.currentIndex += 1;
     today.currentTaskStart = now;
+    today.pausedAt = null;
+    today.pausedMsTotal = 0;
     await saveActiveRoutine();
     renderActive();
     // Only flash if there's still a next step showing — renderActive() above
@@ -717,6 +761,19 @@
 
   document.getElementById('doneBtn').addEventListener('click', ()=> markDone(false));
   document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
+  document.getElementById('pauseBtn').addEventListener('click', async ()=>{
+    if(!today || today.status !== 'active') return;
+    const now = Date.now();
+    if(today.pausedAt){
+      // Resuming: fold the just-finished pause into the running total.
+      today.pausedMsTotal = (today.pausedMsTotal || 0) + (now - today.pausedAt);
+      today.pausedAt = null;
+    } else {
+      today.pausedAt = now;
+    }
+    await saveActiveRoutine();
+    renderActive();
+  });
   document.getElementById('endBtn').addEventListener('click', ()=>{
     const ok = confirm('End this routine now? Steps not marked done will be left incomplete.');
     if(!ok) return;
@@ -747,7 +804,7 @@
       routineName: r.name,
       entries: today.completedLog.map(e => ({
         taskId: e.taskId, name: e.name, plannedMin: e.plannedMin,
-        actualMin: e.actualMin, skipped: !!e.skipped
+        actualMin: e.actualMin, pausedMin: e.pausedMin || 0, skipped: !!e.skipped
       }))
     });
     if(days.length > 60) days.length = 60;
@@ -777,7 +834,7 @@
       } else {
         const diff = Math.round(e.actualMin - e.plannedMin);
         const diffText = diff === 0 ? 'on plan' : (diff > 0 ? `+${diff}m` : `${diff}m`);
-        row.innerHTML = `<td>${escapeAttr(e.name)}</td><td>${Math.round(e.actualMin)}m actual · ${Math.round(e.plannedMin)}m planned · ${diffText}</td>`;
+        row.innerHTML = `<td>${escapeAttr(e.name)}</td><td>${Math.round(e.actualMin)}m actual · ${Math.round(e.plannedMin)}m planned · ${diffText}${pauseSuffix(e.pausedMin)}</td>`;
       }
       table.appendChild(row);
     });
@@ -878,7 +935,7 @@
         } else {
           const diff = Math.round(entry.actualMin - entry.plannedMin);
           const cls = diff > 0 ? 'over' : (diff < 0 ? 'under' : 'even');
-          html += `<td class="hist-cell ${cls}">${Math.round(entry.actualMin)}/${Math.round(entry.plannedMin)}</td>`;
+          html += `<td class="hist-cell ${cls}">${Math.round(entry.actualMin)}/${Math.round(entry.plannedMin)}${pauseSuffix(entry.pausedMin)}</td>`;
         }
       });
 
