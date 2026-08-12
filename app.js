@@ -657,11 +657,14 @@
       document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
       const noteEl = document.getElementById('paceNote');
       if(isPaused){
-        // Computed fresh from today.pausedAt on every render tick (no
-        // one-time setup), so this ticks correctly on every pause within a
-        // step, not just the first — nothing here depends on prior state.
-        const pausedForMs = now - today.pausedAt;
-        noteEl.textContent = `Paused for ${fmtMMSS(pausedForMs)} — ${fmtMMSS(activeElapsedMs)} active so far.`;
+        // Total paused time on THIS step, summed across every pause/resume
+        // cycle so far — not just the current pause segment (that reset to
+        // 0:00 on each new pause, which read as "broken" on a 2nd+ pause).
+        // Computed fresh from today.pausedMsTotal/pausedAt every render
+        // tick, so it's correct by construction on any pause, not just the
+        // first — nothing here depends on prior render state.
+        const totalPausedMs = currentStepPausedMs();
+        noteEl.textContent = `Paused for ${fmtMMSS(totalPausedMs)} total — ${fmtMMSS(activeElapsedMs)} active so far.`;
         noteEl.className = 'pace-note paused';
       } else {
         const over = activeElapsedMs - plannedMin*60000;
