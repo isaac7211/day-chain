@@ -542,6 +542,7 @@
       currentTaskStart: now,
       pausedAt: null,
       pausedMsTotal: 0,
+      lastAction: null,
       baselineFinish: baselineFinish,
       completedLog: []
     };
@@ -656,7 +657,11 @@
       document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
       const noteEl = document.getElementById('paceNote');
       if(isPaused){
-        noteEl.textContent = `Paused — ${fmtMMSS(activeElapsedMs)} active so far.`;
+        // Computed fresh from today.pausedAt on every render tick (no
+        // one-time setup), so this ticks correctly on every pause within a
+        // step, not just the first — nothing here depends on prior state.
+        const pausedForMs = now - today.pausedAt;
+        noteEl.textContent = `Paused for ${fmtMMSS(pausedForMs)} — ${fmtMMSS(activeElapsedMs)} active so far.`;
         noteEl.className = 'pace-note paused';
       } else {
         const over = activeElapsedMs - plannedMin*60000;
@@ -671,9 +676,23 @@
           noteEl.className = 'pace-note';
         }
       }
-      const pauseBtn = document.getElementById('pauseBtn');
-      pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
-      pauseBtn.classList.toggle('is-paused', isPaused);
+      // The Done button itself becomes the Resume button while paused —
+      // same slot, so there's no separate "Done" target sitting next to
+      // Resume to mis-tap. The original Pause control is hidden while
+      // already paused, since pausing again isn't valid until resumed.
+      const doneBtn = document.getElementById('doneBtn');
+      doneBtn.textContent = isPaused ? 'Resume' : 'Done';
+      doneBtn.classList.toggle('btn-go', isPaused);
+      document.getElementById('pauseBtn').hidden = isPaused;
+    }
+
+    const undoBtn = document.getElementById('undoBtn');
+    if(today.lastAction){
+      const endedTask = tasks[today.lastAction.index];
+      undoBtn.textContent = `↩ Undo "${endedTask ? endedTask.name : 'last step'}"`;
+      undoBtn.hidden = false;
+    } else {
+      undoBtn.hidden = true;
     }
 
     // upcoming list with live-computed clock times
@@ -732,9 +751,15 @@
     const pausedMin = currentStepPausedMs()/60000;
     // Active minutes only — wall-clock time minus whatever was paused, so a
     // 40-minute step with a 10-minute pause logs 30 actual minutes toward
-    // this step's rolling average, not 40.
+    // this step's rolling average, not 40. Computed regardless of skip,
+    // since undo needs the TRUE active time even for a skipped step (the
+    // logged entry below still zeroes it out for skips, unchanged).
     const actualMin = Math.max(0, (now - today.currentTaskStart)/60000 - pausedMin);
     const plannedMin = plannedMinFor(task);
+
+    // Single-level undo snapshot — overwritten on every step-ending action,
+    // so only the most recent one is ever recoverable.
+    today.lastAction = { index: idx, activeMin: actualMin, skip };
 
     if(!skip){
       today.completedLog.push({ taskId: task.id, name: task.name, actualMin, plannedMin, pausedMin, skipped:false });
@@ -752,16 +777,18 @@
     // may have already moved us on to the summary screen (routine finished),
     // in which case the current-task card isn't visible anymore.
     if(today.status === 'active'){
-      const card = document.querySelector('.current-task');
-      card.classList.remove('step-advance');
-      void card.offsetWidth; // restart the animation even if it's already running
-      card.classList.add('step-advance');
+      flashCurrentTaskCard();
     }
   }
 
-  document.getElementById('doneBtn').addEventListener('click', ()=> markDone(false));
-  document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
-  document.getElementById('pauseBtn').addEventListener('click', async ()=>{
+  function flashCurrentTaskCard(){
+    const card = document.querySelector('.current-task');
+    card.classList.remove('step-advance');
+    void card.offsetWidth; // restart the animation even if it's already running
+    card.classList.add('step-advance');
+  }
+
+  async function togglePause(){
     if(!today || today.status !== 'active') return;
     const now = Date.now();
     if(today.pausedAt){
@@ -773,7 +800,49 @@
     }
     await saveActiveRoutine();
     renderActive();
+  }
+
+  // Reverses the single most recent Done/Skip. Restores the ended step as
+  // current again, folding in both its own original active time AND
+  // whatever active time had accrued on the step the user mistakenly moved
+  // into since — that time was genuinely spent on the restored step in
+  // reality, just misattributed to the wrong step's clock. The wrong step
+  // itself ends up not-yet-started, with none of its own time kept.
+  async function undoLastStepAction(){
+    if(!today || !today.lastAction || today.status !== 'active') return;
+    const la = today.lastAction;
+    const now = Date.now();
+
+    const wrongStepPausedMin = currentStepPausedMs()/60000;
+    const bridgeActiveMin = Math.max(0, (now - today.currentTaskStart)/60000 - wrongStepPausedMin);
+    const restoredActiveMin = la.activeMin + bridgeActiveMin;
+
+    // The just-ended entry is always the last one pushed to completedLog —
+    // remove it so it's fully retracted (it was never part of any saved
+    // day/average yet; that only happens when the whole routine finishes).
+    today.completedLog.pop();
+
+    today.currentIndex = la.index;
+    // Back-date the start so elapsed-since-start equals the restored active
+    // minutes exactly, with a clean (zeroed) pause total — no pause carries
+    // over, matching "resumes with its clock picking up where it left off."
+    today.currentTaskStart = now - restoredActiveMin*60000;
+    today.pausedAt = null;
+    today.pausedMsTotal = 0;
+    today.lastAction = null;
+
+    await saveActiveRoutine();
+    renderActive();
+    if(today.status === 'active') flashCurrentTaskCard();
+  }
+
+  document.getElementById('doneBtn').addEventListener('click', ()=>{
+    if(today && today.pausedAt){ togglePause(); } // this slot is "Resume" while paused
+    else { markDone(false); }
   });
+  document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
+  document.getElementById('pauseBtn').addEventListener('click', togglePause);
+  document.getElementById('undoBtn').addEventListener('click', undoLastStepAction);
   document.getElementById('endBtn').addEventListener('click', ()=>{
     const ok = confirm('End this routine now? Steps not marked done will be left incomplete.');
     if(!ok) return;

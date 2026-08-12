@@ -183,7 +183,6 @@ header{
 .pace-note.paused{ color: var(--amber); }
 .btn-row{ display:flex; gap:10px; }
 #pauseBtn{ flex-shrink:0; }
-#pauseBtn.is-paused{ background: var(--amber-dim); color: var(--amber); border-color: var(--amber); }
 button{
   font-family:'Inter',sans-serif;
   cursor:pointer;
@@ -196,6 +195,7 @@ button{
 }
 .btn-primary{ background: var(--amber); color:#241a0d; flex:1; transition: filter 0.1s, transform 0.1s; }
 .btn-primary:active{ filter: brightness(0.82); transform: scale(0.97); }
+.btn-primary.btn-go{ background: var(--sage); color: var(--bg); }
 .btn-ghost{ background: transparent; color: var(--text-dim); border:1px solid var(--border); transition: background 0.1s, transform 0.1s; }
 .btn-ghost:hover{ color: var(--text); }
 .btn-ghost:active{ background: var(--surface-2); transform: scale(0.97); }
