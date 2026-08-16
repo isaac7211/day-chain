@@ -115,10 +115,31 @@
           <span class="timer-planned" id="currentPlanned">/ 0:00 planned</span>
         </div>
         <div class="pace-note" id="paceNote"></div>
-        <div class="btn-row">
+
+        <div class="btn-row" id="mainActionRow">
           <button class="btn-primary" id="doneBtn">Done</button>
           <button class="btn-ghost" id="pauseBtn">Pause</button>
-          <button class="btn-ghost" id="skipBtn">Skip</button>
+        </div>
+
+        <div class="end-step-dialog" id="endStepChoice" hidden>
+          <button class="btn-primary" id="endStepNowBtn">Done now</button>
+          <button class="btn-ghost" id="endStepEditBtn">Edit end time</button>
+          <button class="btn-ghost" id="endStepSkipBtn">Skip</button>
+          <button class="btn-ghost btn-small" id="endStepCancelBtn">Cancel</button>
+        </div>
+
+        <div class="end-step-edit-time" id="endStepEditTime" hidden>
+          <div class="settings-row">
+            <label for="endStepMinutesInput">This step took about</label>
+            <div class="minutes-input-wrap">
+              <input type="number" id="endStepMinutesInput" min="0" inputmode="decimal">
+              <span class="unit">min</span>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn-primary" id="endStepConfirmBtn">Confirm</button>
+            <button class="btn-ghost" id="endStepBackBtn">Back</button>
+          </div>
         </div>
       </div>
 

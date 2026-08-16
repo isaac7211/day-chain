@@ -337,6 +337,26 @@ ul{ list-style:none; margin:0; padding:0; }
 .danger-btn{ background: var(--coral); color:#2a140d; flex:1; }
 .danger-btn:active{ filter: brightness(0.82); transform: scale(0.97); }
 
+/* END-STEP DIALOG */
+.end-step-dialog{ display:flex; flex-direction:column; gap:8px; }
+.end-step-dialog button{ width:100%; }
+.end-step-dialog #endStepCancelBtn{ margin-top:4px; }
+.end-step-edit-time .settings-row{ margin-bottom:16px; }
+.end-step-edit-time label{ font-size:14px; color: var(--text-dim); }
+.minutes-input-wrap{ display:flex; align-items:center; gap:6px; flex-shrink:0; }
+.minutes-input-wrap input[type=number]{
+  width: 60px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  text-align:center;
+  padding: 8px 2px;
+  font-size:14px;
+  font-family:'Inter',sans-serif;
+}
+.minutes-input-wrap .unit{ font-size:13px; color: var(--text-faint); }
+
 [hidden]{ display:none !important; }
 
 .summary-table{ width:100%; border-collapse: collapse; font-size:13px; }

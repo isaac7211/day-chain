@@ -20,7 +20,7 @@
   // `tasks`/`settings`/`routineName`/`today` below are a "working copy" of
   // whichever routine is currently open (activeRoutineId) — kept in sync with
   // its entry in `routines` on load/save. This lets renderSetup/renderActive/
-  // renderSummary/markDone/finishRoutine read/write them exactly as before;
+  // renderSummary/endCurrentStep/finishRoutine read/write them exactly as before;
   // only the load/save/navigation layer needed to change for multi-routine
   // support.
   let routines = [];
@@ -540,6 +540,7 @@
       startTime: now,
       currentIndex: 0,
       currentTaskStart: now,
+      currentTaskRealStart: now,
       pausedAt: null,
       pausedMsTotal: 0,
       lastAction: null,
@@ -596,7 +597,7 @@
 
   // Total ms the CURRENT step has been paused, including an in-progress
   // pause (pausedAt set but not yet resumed). Resets to 0 whenever the step
-  // changes — see markDone().
+  // changes — see endCurrentStep().
   function currentStepPausedMs(){
     let total = (today && today.pausedMsTotal) || 0;
     if(today && today.pausedAt) total += (Date.now() - today.pausedAt);
@@ -746,19 +747,37 @@
     }
   }
 
-  async function markDone(skip){
+  // Ends the current step. Two modes:
+  // - overrideActiveMin == null: "Done now" / "Skip" — uses the real current
+  //   time, exactly as the old Done/Skip buttons did.
+  // - overrideActiveMin is a number: "Edit end time" — the step is deemed to
+  //   have lasted exactly that many active minutes from when it started,
+  //   regardless of what the live clock says. The NEXT step's start-anchor
+  //   is computed from that (start + active + already-paused time), not
+  //   real "now" — that's what makes catching up on several steps in a row
+  //   work: a backdated end here leaves the next step already showing as
+  //   elapsed, so the same dialog naturally handles it too, one at a time.
+  async function endCurrentStep({ skip, overrideActiveMin }){
     const now = Date.now();
     const idx = today.currentIndex;
     if(idx >= tasks.length) return;
     const task = tasks[idx];
     const pausedMin = currentStepPausedMs()/60000;
-    // Active minutes only — wall-clock time minus whatever was paused, so a
-    // 40-minute step with a 10-minute pause logs 30 actual minutes toward
-    // this step's rolling average, not 40. Computed regardless of skip,
-    // since undo needs the TRUE active time even for a skipped step (the
-    // logged entry below still zeroes it out for skips, unchanged).
-    const actualMin = Math.max(0, (now - today.currentTaskStart)/60000 - pausedMin);
     const plannedMin = plannedMinFor(task);
+
+    let actualMin, nextStepStart;
+    if(overrideActiveMin != null){
+      actualMin = overrideActiveMin;
+      nextStepStart = today.currentTaskStart + (overrideActiveMin + pausedMin)*60000;
+    } else {
+      // Active minutes only — wall-clock time minus whatever was paused, so
+      // a 40-minute step with a 10-minute pause logs 30 actual minutes
+      // toward this step's rolling average, not 40. Computed regardless of
+      // skip, since undo needs the TRUE active time even for a skipped step
+      // (the logged entry below still zeroes it out for skips, unchanged).
+      actualMin = Math.max(0, (now - today.currentTaskStart)/60000 - pausedMin);
+      nextStepStart = now;
+    }
 
     // Single-level undo snapshot — overwritten on every step-ending action,
     // so only the most recent one is ever recoverable.
@@ -771,7 +790,13 @@
     }
 
     today.currentIndex += 1;
-    today.currentTaskStart = now;
+    today.currentTaskStart = nextStepStart;
+    // The REAL moment we landed on this next step — separate from
+    // currentTaskStart, which may be backdated above. Undo uses this (not
+    // currentTaskStart) to measure genuine time spent on the wrong step, so
+    // a backdated chain of steps doesn't get misread as hours of real
+    // elapsed time if undone.
+    today.currentTaskRealStart = now;
     today.pausedAt = null;
     today.pausedMsTotal = 0;
     await saveActiveRoutine();
@@ -816,8 +841,13 @@
     const la = today.lastAction;
     const now = Date.now();
 
+    // currentTaskRealStart (not currentTaskStart, which may be backdated by
+    // an "edit end time" chain) — genuine wall-clock time since we actually
+    // landed on this step is what counts as real bridge time. Falls back to
+    // currentTaskStart for a routine started before this field existed.
+    const realStart = today.currentTaskRealStart != null ? today.currentTaskRealStart : today.currentTaskStart;
     const wrongStepPausedMin = currentStepPausedMs()/60000;
-    const bridgeActiveMin = Math.max(0, (now - today.currentTaskStart)/60000 - wrongStepPausedMin);
+    const bridgeActiveMin = Math.max(0, (now - realStart)/60000 - wrongStepPausedMin);
     const restoredActiveMin = la.activeMin + bridgeActiveMin;
 
     // The just-ended entry is always the last one pushed to completedLog —
@@ -830,6 +860,7 @@
     // minutes exactly, with a clean (zeroed) pause total — no pause carries
     // over, matching "resumes with its clock picking up where it left off."
     today.currentTaskStart = now - restoredActiveMin*60000;
+    today.currentTaskRealStart = now;
     today.pausedAt = null;
     today.pausedMsTotal = 0;
     today.lastAction = null;
@@ -839,13 +870,67 @@
     if(today.status === 'active') flashCurrentTaskCard();
   }
 
+  // ---------- END-STEP DIALOG ----------
+  function openEndStepDialog(){
+    if(!today || today.status !== 'active') return;
+    document.getElementById('mainActionRow').hidden = true;
+    document.getElementById('endStepEditTime').hidden = true;
+    document.getElementById('endStepChoice').hidden = false;
+    // Undo lives outside this card and would otherwise stay clickable while
+    // mid-decision here, undoing a DIFFERENT step out from under a dialog
+    // that's still showing options for the current one.
+    document.getElementById('undoBtn').hidden = true;
+  }
+  // Just hides the dialog UI, no render — used before endCurrentStep(),
+  // which does its own render once its (async) work completes. Rendering
+  // here too would briefly flash the OLD step's state in between.
+  function hideEndStepDialogUI(){
+    document.getElementById('mainActionRow').hidden = false;
+    document.getElementById('endStepChoice').hidden = true;
+    document.getElementById('endStepEditTime').hidden = true;
+  }
+  // For Cancel specifically, where no endCurrentStep() follows — resync
+  // undoBtn (and everything else) immediately rather than waiting for the
+  // next tick.
+  function cancelEndStepDialog(){
+    hideEndStepDialogUI();
+    renderActive();
+  }
+
   document.getElementById('doneBtn').addEventListener('click', ()=>{
     if(today && today.pausedAt){ togglePause(); } // this slot is "Resume" while paused
-    else { markDone(false); }
+    else { openEndStepDialog(); }
   });
-  document.getElementById('skipBtn').addEventListener('click', ()=> markDone(true));
   document.getElementById('pauseBtn').addEventListener('click', togglePause);
   document.getElementById('undoBtn').addEventListener('click', undoLastStepAction);
+
+  document.getElementById('endStepNowBtn').addEventListener('click', ()=>{
+    hideEndStepDialogUI();
+    endCurrentStep({ skip:false, overrideActiveMin:null });
+  });
+  document.getElementById('endStepSkipBtn').addEventListener('click', ()=>{
+    hideEndStepDialogUI();
+    endCurrentStep({ skip:true, overrideActiveMin:null });
+  });
+  document.getElementById('endStepCancelBtn').addEventListener('click', cancelEndStepDialog);
+  document.getElementById('endStepEditBtn').addEventListener('click', ()=>{
+    document.getElementById('endStepChoice').hidden = true;
+    const input = document.getElementById('endStepMinutesInput');
+    const currentTask = tasks[today.currentIndex];
+    input.value = currentTask ? Math.round(plannedMinFor(currentTask)) : 0;
+    document.getElementById('endStepEditTime').hidden = false;
+    input.focus();
+    input.select();
+  });
+  document.getElementById('endStepBackBtn').addEventListener('click', ()=>{
+    document.getElementById('endStepEditTime').hidden = true;
+    document.getElementById('endStepChoice').hidden = false;
+  });
+  document.getElementById('endStepConfirmBtn').addEventListener('click', ()=>{
+    const minutes = Math.max(0, parseFloat(document.getElementById('endStepMinutesInput').value) || 0);
+    hideEndStepDialogUI();
+    endCurrentStep({ skip:false, overrideActiveMin: minutes });
+  });
   document.getElementById('endBtn').addEventListener('click', ()=>{
     const ok = confirm('End this routine now? Steps not marked done will be left incomplete.');
     if(!ok) return;
