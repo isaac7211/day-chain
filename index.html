@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Day Chain">
+<link rel="manifest" href="manifest.json">
 <title>Day Chain</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,6 +39,10 @@
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>
           History
         </button>
+        <button id="libraryBtn" class="btn-pill-icon" title="Step library" hidden>
+          <svg class="icon" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 016.5 3H19a1 1 0 011 1v15a1 1 0 01-1 1H6.5A2.5 2.5 0 014 17.5v-12z"/><path d="M4 17.5A2.5 2.5 0 016.5 15H20"/></svg>
+          Library
+        </button>
         <button id="settingsBtn" class="btn-pill-icon" title="Edit routine">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 13.5a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.55V19.6a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.55-1H4.4a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H10.5a1.7 1.7 0 001-1.55V4.4a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V10.5a1.7 1.7 0 001.55 1h.09a2 2 0 110 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
           Edit
@@ -61,11 +66,22 @@
       </div>
     </main>
 
+    <!-- STEP LIBRARY SCREEN -->
+    <main id="screen-library" hidden>
+      <button class="btn-ghost btn-small" id="backFromLibraryBtn">← Back</button>
+      <div class="card">
+        <div class="label">Step library</div>
+        <div class="preview-line" style="margin-top:-4px; margin-bottom:12px;">Starting defaults you can pick from when adding a step to any routine. Editing here never changes steps already added to a routine, and routines never write back to it.</div>
+        <ul id="libraryList"></ul>
+        <button class="add-task-btn" id="addLibraryStepBtn">+ Add step to library</button>
+      </div>
+    </main>
+
     <!-- SETUP SCREEN -->
     <main id="screen-setup" hidden>
       <button class="btn-ghost btn-small" id="backToRoutinesBtn">← All routines</button>
 
-      <div class="card">
+      <div class="card" id="routineNameCard">
         <div class="label">Routine name</div>
         <input type="text" id="routineNameInput" class="routine-name-input" placeholder="Routine name">
       </div>
@@ -74,6 +90,11 @@
         <div class="label">Your routine</div>
         <ul id="taskEditList"></ul>
         <button class="add-task-btn" id="addTaskBtn">+ Add step</button>
+        <div id="addTaskChooser" hidden>
+          <button class="btn-ghost" id="addBlankStepBtn" style="width:100%; margin-top:12px;">Start blank</button>
+          <div class="label" style="margin-top:16px;">Or pick from your library</div>
+          <ul id="libraryPickerList"></ul>
+        </div>
       </div>
 
       <div class="card">
@@ -114,6 +135,7 @@
           <span class="timer-elapsed" id="currentElapsed">0:00</span>
           <span class="timer-planned" id="currentPlanned">/ 0:00 planned</span>
         </div>
+        <div class="step-finish-note" id="stepFinishNote"></div>
         <div class="pace-note" id="paceNote"></div>
 
         <div class="btn-row" id="mainActionRow">
@@ -122,7 +144,7 @@
         </div>
 
         <div class="end-step-dialog" id="endStepChoice" hidden>
-          <button class="btn-primary" id="endStepNowBtn">Done now</button>
+          <button class="btn-primary btn-info" id="endStepNowBtn">Done now</button>
           <button class="btn-ghost" id="endStepEditBtn">Edit end time</button>
           <button class="btn-ghost" id="endStepSkipBtn">Skip</button>
           <button class="btn-ghost btn-small" id="endStepCancelBtn">Cancel</button>
@@ -154,6 +176,24 @@
       </div>
 
       <button class="btn-ghost btn-small" id="undoBtn" hidden>↩ Undo last step</button>
+      <button class="btn-ghost btn-small" id="addUnplannedBtn">+ Add unplanned step</button>
+
+      <div class="card" id="unplannedForm" hidden>
+        <div class="label">What happened?</div>
+        <input type="text" id="unplannedNameInput" class="routine-name-input" style="font-size:16px;" placeholder="e.g. Unexpected phone call">
+        <div class="settings-row" style="margin-top:12px;">
+          <label for="unplannedMinutesInput">Took about</label>
+          <div class="minutes-input-wrap">
+            <input type="number" id="unplannedMinutesInput" min="0" inputmode="decimal">
+            <span class="unit">min</span>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="unplannedConfirmBtn">Add</button>
+          <button class="btn-ghost" id="unplannedCancelBtn">Cancel</button>
+        </div>
+      </div>
+
       <button class="btn-ghost btn-small" id="endBtn">End routine early</button>
       <div class="keep-awake-status" id="keepAwakeStatus" hidden></div>
     </main>
@@ -189,6 +229,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="sortable.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -1,0 +1,8 @@
+{
+  "name": "Day Chain",
+  "short_name": "Day Chain",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#1b211f",
+  "theme_color": "#1b211f"
+}

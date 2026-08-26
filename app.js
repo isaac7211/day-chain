@@ -31,6 +31,14 @@
   let today = null; // active routine state
   let tickHandle = null;
   let deleteRoutineState = 'idle'; // 'idle' | 'confirm'
+  // Step library: { id, name, baseEst } entries, purely a source of starting
+  // defaults when adding a step to a routine. Never read from or written to
+  // by routine/step-history logic — routines copy name+baseEst once, at
+  // add-time, into their own independent task objects.
+  let stepLibrary = [];
+  // Set right before navigating into a freshly-duplicated routine's setup
+  // screen, so renderSetup() can flash it once and then clear this.
+  let justDuplicatedRoutineId = null;
 
   // ---------- storage helpers (Firestore, one doc per signed-in user) ----------
   // docRef/docCache are only ever set after auth resolves (see the
@@ -62,6 +70,12 @@
     docCache.activeRoutineId = activeRoutineId;
     try{ await docRef.set({ activeRoutineId }, { merge: true }); }
     catch(e){ console.error('firestore set failed', 'activeRoutineId', e); }
+  }
+  async function persistStepLibrary(){
+    if(!docRef) return;
+    docCache.stepLibrary = stepLibrary;
+    try{ await docRef.set({ stepLibrary }, { merge: true }); }
+    catch(e){ console.error('firestore set failed', 'stepLibrary', e); }
   }
   // Writes the working copy (tasks/settings/name/today) back into the open
   // routine's entry in `routines`, then persists the whole array.
@@ -310,14 +324,94 @@
     }
   });
 
+  // ---------- SOUND ALERTS (active, non-paused step only) ----------
+  // Two short, distinct clips: a gentle two-beep heads-up 2 minutes before
+  // planned end, and a more insistent three-note rise at the zero mark and
+  // every 5 minutes after that for as long as the step keeps running long.
+  // No haptics — iOS Safari has no vibration API at all, confirmed, not a
+  // bug to work around.
+  let alertAudioWarn = null;
+  let alertAudioEnd = null;
+  let audioUnlocked = false;
+  // iOS blocks audio playback that isn't tied to a user gesture. These
+  // alerts fire on a timer, not a tap, so playback needs to be "unlocked"
+  // once by a real gesture first — same trick as the keep-awake video:
+  // play+immediately-pause synchronously inside a real click. Hooked to the
+  // very first tap anywhere in the app, since by the time a routine is
+  // actually running the user has certainly tapped something already.
+  function ensureAlertAudioUnlocked(){
+    if(audioUnlocked) return;
+    audioUnlocked = true;
+    alertAudioWarn = new Audio('alert-warning.mp3');
+    alertAudioEnd = new Audio('alert-end.mp3');
+    [alertAudioWarn, alertAudioEnd].forEach(a=>{
+      a.play().then(()=>{ a.pause(); a.currentTime = 0; }).catch(()=>{});
+    });
+  }
+  document.addEventListener('click', ensureAlertAudioUnlocked, { once: true, capture: true });
+
+  function playAlertSound(kind){
+    const audio = kind === 'warn' ? alertAudioWarn : alertAudioEnd;
+    if(!audio) return;
+    try{ audio.currentTime = 0; audio.play().catch(e=>console.warn('[sound-alert] play failed', e)); }
+    catch(e){ console.warn('[sound-alert] play failed', e); }
+  }
+
+  // Which named checkpoints ('warn2', 'zero', 'over5', 'over10', ...) an
+  // active-minutes count has reached for a step with the given plan.
+  function soundCheckpointsReached(activeElapsedMin, plannedMin){
+    const reached = [];
+    if(activeElapsedMin >= plannedMin - 2) reached.push('warn2');
+    if(activeElapsedMin >= plannedMin) reached.push('zero');
+    const overMin = activeElapsedMin - plannedMin;
+    if(overMin > 0){
+      const steps = Math.floor(overMin / 5);
+      for(let i=1;i<=steps;i++) reached.push('over'+(i*5));
+    }
+    return reached;
+  }
+
+  let soundFiredCheckpoints = new Set();
+
+  // Call whenever a DIFFERENT step becomes current (routine start, a step
+  // ending, undo, or resuming a routine that was already running before a
+  // reload) — silently seeds the fired-set with whatever checkpoints that
+  // step has ALREADY reached at this instant (e.g. a backdated "edit end
+  // time" chain, an undo restoring 60 elapsed minutes, or simply reopening
+  // the tab hours later), so nothing bursts out a pile of alerts all at
+  // once for time that's already passed. Only checkpoints crossed AFTER
+  // this point actually play a sound, via checkStepSoundAlerts() below.
+  function resetSoundTrackingForCurrentStep(){
+    soundFiredCheckpoints = new Set();
+    if(!today || today.status !== 'active') return;
+    const idx = today.currentIndex;
+    if(idx >= tasks.length) return;
+    const activeElapsedMin = Math.max(0, (Date.now() - today.currentTaskStart)/60000 - currentStepPausedMs()/60000);
+    const plannedMin = plannedMinFor(tasks[idx]);
+    soundCheckpointsReached(activeElapsedMin, plannedMin).forEach(cp => soundFiredCheckpoints.add(cp));
+  }
+
+  // Called every render tick while a step is active. Pausing naturally
+  // stops new checkpoints from being reached at all, since activeElapsedMin
+  // freezes during a pause — no special-casing needed here for that.
+  function checkStepSoundAlerts(activeElapsedMin, plannedMin){
+    soundCheckpointsReached(activeElapsedMin, plannedMin).forEach(cp=>{
+      if(soundFiredCheckpoints.has(cp)) return;
+      soundFiredCheckpoints.add(cp);
+      playAlertSound(cp === 'warn2' ? 'warn' : 'end');
+    });
+  }
+
   // ---------- render router ----------
   function showScreen(id){
-    ['screen-routines','screen-setup','screen-active','screen-summary','screen-history'].forEach(s=>{
+    ['screen-routines','screen-setup','screen-active','screen-summary','screen-history','screen-library'].forEach(s=>{
       document.getElementById(s).hidden = (s !== id);
     });
     // The header's "Edit" pill only makes sense once a specific routine is
-    // open and not already being edited.
-    document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup');
+    // open and not already being edited; "Library" only where adding a step
+    // is relevant. The two are never both shown at once.
+    document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup' || id === 'screen-library');
+    document.getElementById('libraryBtn').hidden = !(id === 'screen-routines' || id === 'screen-setup');
   }
 
   function renderAll(){
@@ -406,6 +500,12 @@
     openRoutine(r.id);
   }
 
+  function duplicateAndOpen(src){
+    const dup = duplicateRoutineObj(src);
+    justDuplicatedRoutineId = dup.id;
+    addRoutineAndOpen(dup);
+  }
+
   function renderDuplicateChooserList(){
     const list = document.getElementById('duplicateChooserList');
     list.innerHTML = '';
@@ -413,7 +513,7 @@
       const li = document.createElement('li');
       li.className = 'routine-list-item';
       li.innerHTML = `<span class="name">${escapeAttr(r.name)}</span>`;
-      li.addEventListener('click', () => addRoutineAndOpen(duplicateRoutineObj(r)));
+      li.addEventListener('click', () => duplicateAndOpen(r));
       list.appendChild(li);
     });
   }
@@ -438,10 +538,78 @@
     showRoutineList();
   });
 
+  // ---------- STEP LIBRARY screen ----------
+  // Purely a source of starting defaults for the "+ Add step" picker on a
+  // routine's setup screen — see renderLibraryPickerList(). Never read by
+  // any routine/history/projection logic, and never written to by it either;
+  // a routine's own steps are independent copies made once, at add-time.
+  let libraryScreenReturnTo = 'screen-routines'; // where "← Back" goes
+  function showLibrary(returnTo){
+    libraryScreenReturnTo = returnTo;
+    renderLibrary();
+    showScreen('screen-library');
+  }
+  document.getElementById('libraryBtn').addEventListener('click', () => {
+    showLibrary(today || activeRoutineId ? 'screen-setup' : 'screen-routines');
+  });
+  document.getElementById('backFromLibraryBtn').addEventListener('click', () => {
+    if(libraryScreenReturnTo === 'screen-setup' && activeRoutineId){ renderAll(); }
+    else { showRoutineList(); }
+  });
+
+  function renderLibrary(){
+    const list = document.getElementById('libraryList');
+    list.innerHTML = '';
+    if(stepLibrary.length === 0){
+      const li = document.createElement('li');
+      li.className = 'hist-empty';
+      li.textContent = 'No library steps yet — add your first one below.';
+      list.appendChild(li);
+    }
+    stepLibrary.forEach((item, idx) => {
+      const li = document.createElement('li');
+      li.className = 'task-row';
+      li.innerHTML = `
+        <input type="text" value="${escapeAttr(item.name)}" data-idx="${idx}" class="lib-name-input">
+        <input type="number" min="1" value="${item.baseEst}" data-idx="${idx}" class="lib-min-input">
+        <span class="unit">min</span>
+        <button class="icon-btn remove-btn" data-idx="${idx}">✕</button>
+      `;
+      list.appendChild(li);
+    });
+    list.querySelectorAll('.lib-name-input').forEach(inp=>{
+      inp.addEventListener('input', e=>{ stepLibrary[+e.target.dataset.idx].name = e.target.value; });
+      inp.addEventListener('blur', persistStepLibrary);
+    });
+    list.querySelectorAll('.lib-min-input').forEach(inp=>{
+      inp.addEventListener('input', e=>{
+        stepLibrary[+e.target.dataset.idx].baseEst = Math.max(1, parseInt(e.target.value)||1);
+      });
+      inp.addEventListener('blur', persistStepLibrary);
+    });
+    list.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click', e=>{
+      stepLibrary.splice(+e.target.dataset.idx, 1);
+      persistStepLibrary(); renderLibrary();
+    }));
+  }
+  document.getElementById('addLibraryStepBtn').addEventListener('click', ()=>{
+    stepLibrary.push({ id: uid(), name: 'New step', baseEst: 10 });
+    persistStepLibrary(); renderLibrary();
+  });
+
   // ---------- SETUP screen ----------
   function renderSetup(){
     document.getElementById('routineNameInput').value = routineName;
     document.getElementById('targetLabelInput').value = settings.targetLabel;
+    document.getElementById('addTaskChooser').hidden = true;
+
+    if(justDuplicatedRoutineId && justDuplicatedRoutineId === activeRoutineId){
+      justDuplicatedRoutineId = null;
+      const card = document.getElementById('routineNameCard');
+      card.classList.remove('flash-confirm');
+      void card.offsetWidth;
+      card.classList.add('flash-confirm');
+    }
 
     const list = document.getElementById('taskEditList');
     list.innerHTML = '';
@@ -449,11 +617,10 @@
       const li = document.createElement('li');
       li.className = 'task-row';
       li.innerHTML = `
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <input type="text" value="${escapeAttr(t.name)}" data-idx="${idx}" class="name-input">
         <input type="number" min="1" value="${t.baseEst}" data-idx="${idx}" class="min-input">
         <span class="unit">min</span>
-        <button class="icon-btn up-btn" data-idx="${idx}" ${idx===0?'disabled style="opacity:.25"':''}>↑</button>
-        <button class="icon-btn down-btn" data-idx="${idx}" ${idx===tasks.length-1?'disabled style="opacity:.25"':''}>↓</button>
         <button class="icon-btn remove-btn" data-idx="${idx}">✕</button>
       `;
       list.appendChild(li);
@@ -474,23 +641,61 @@
       });
       inp.addEventListener('blur', persistTasks);
     });
-    list.querySelectorAll('.up-btn').forEach(b=>b.addEventListener('click', e=>{
-      const i = +e.target.dataset.idx;
-      if(i>0){ [tasks[i-1],tasks[i]] = [tasks[i],tasks[i-1]]; persistTasks(); renderSetup(); }
-    }));
-    list.querySelectorAll('.down-btn').forEach(b=>b.addEventListener('click', e=>{
-      const i = +e.target.dataset.idx;
-      if(i<tasks.length-1){ [tasks[i+1],tasks[i]] = [tasks[i],tasks[i+1]]; persistTasks(); renderSetup(); }
-    }));
     list.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click', e=>{
       const i = +e.target.dataset.idx;
       tasks.splice(i,1);
       persistTasks(); renderSetup();
     }));
 
+    // Drag-and-drop reordering (touch-friendly) — same pattern as Strength
+    // Tracker's movement reordering: a dedicated drag handle, Sortable.js
+    // reorders the DOM, onEnd reorders the underlying array to match and
+    // re-renders. Unlike Strength Tracker (which builds a fresh <ul> every
+    // render), taskEditList is a persistent element only cleared via
+    // innerHTML='' above — so the Sortable instance bound to IT, not its
+    // children, would otherwise survive every render and stack up a new
+    // set of listeners on top of the last one. Destroy any prior instance
+    // on this element first.
+    const existingSortable = Sortable.get(list);
+    if(existingSortable) existingSortable.destroy();
+    Sortable.create(list, {
+      handle: '.drag-handle',
+      animation: 150,
+      onEnd: (evt) => {
+        if(evt.oldIndex === evt.newIndex) return;
+        const [moved] = tasks.splice(evt.oldIndex, 1);
+        tasks.splice(evt.newIndex, 0, moved);
+        persistTasks();
+        renderSetup();
+      }
+    });
+
     document.getElementById('targetTimeInput').value = settings.targetTime;
     renderDeleteRoutineSection();
     updateSetupPreview();
+  }
+
+  function renderLibraryPickerList(){
+    const list = document.getElementById('libraryPickerList');
+    list.innerHTML = '';
+    if(stepLibrary.length === 0){
+      const li = document.createElement('li');
+      li.className = 'hist-empty';
+      li.textContent = 'Your library is empty — add steps to it from the Library screen.';
+      list.appendChild(li);
+      return;
+    }
+    stepLibrary.forEach(item=>{
+      const li = document.createElement('li');
+      li.className = 'routine-list-item';
+      li.innerHTML = `<span class="name">${escapeAttr(item.name)}</span><span class="time">${Math.round(item.baseEst)} min</span>`;
+      li.addEventListener('click', ()=>{
+        tasks.push({ id: uid(), name: item.name, baseEst: item.baseEst });
+        document.getElementById('addTaskChooser').hidden = true;
+        persistTasks(); renderSetup();
+      });
+      list.appendChild(li);
+    });
   }
 
   function updateSetupPreview(){
@@ -519,7 +724,13 @@
   document.getElementById('targetLabelInput').addEventListener('blur', persistTasks);
 
   document.getElementById('addTaskBtn').addEventListener('click', ()=>{
+    const chooser = document.getElementById('addTaskChooser');
+    chooser.hidden = !chooser.hidden;
+    if(!chooser.hidden) renderLibraryPickerList();
+  });
+  document.getElementById('addBlankStepBtn').addEventListener('click', ()=>{
     tasks.push({id: uid(), name:'New step', baseEst:10});
+    document.getElementById('addTaskChooser').hidden = true;
     persistTasks(); renderSetup();
   });
   document.getElementById('targetTimeInput').addEventListener('change', e=>{
@@ -547,6 +758,7 @@
       baselineFinish: baselineFinish,
       completedLog: []
     };
+    resetSoundTrackingForCurrentStep();
     await persistTasks();
     renderAll();
   });
@@ -554,7 +766,7 @@
   // ---------- ROUTINE MANAGEMENT (duplicate/delete) ----------
   document.getElementById('duplicateRoutineBtn').addEventListener('click', () => {
     const src = getActiveRoutine();
-    if(src) addRoutineAndOpen(duplicateRoutineObj(src));
+    if(src) duplicateAndOpen(src);
   });
   document.getElementById('deleteRoutineBtn').addEventListener('click', () => {
     deleteRoutineState = 'confirm';
@@ -656,6 +868,12 @@
       elapsedEl.classList.toggle('paused', isPaused);
       const plannedMin = plannedMinFor(currentTask);
       document.getElementById('currentPlanned').textContent = `/ ${fmtMMSS(plannedMin*60000)} planned`;
+      // Same live-projection math as the hero's overall projected-finish
+      // (now + currentRemainingMs), just scoped to this one step — recalculates
+      // every tick, so it climbs if the step runs long and settles if it
+      // finishes early, same as the top-of-screen version does.
+      document.getElementById('stepFinishNote').textContent = `Finishing around ${fmtClock(now + currentRemainingMs)}`;
+      if(!isPaused) checkStepSoundAlerts(activeElapsedMs/60000, plannedMin);
       const noteEl = document.getElementById('paceNote');
       if(isPaused){
         // Total paused time on THIS step, summed across every pause/resume
@@ -728,7 +946,9 @@
       today.completedLog.forEach(e=>{
         const li = document.createElement('li');
         li.className = 'completed-item';
-        if(e.skipped){
+        if(e.unplanned){
+          li.innerHTML = `<span class="name" style="font-style:italic;">${escapeAttr(e.name)}</span><span class="diff even">${Math.round(e.actualMin)} min · unplanned</span>`;
+        } else if(e.skipped){
           li.innerHTML = `<span class="name">${escapeAttr(e.name)}</span><span class="diff even" style="font-style:italic;">skipped</span>`;
         } else {
           const diff = Math.round(e.actualMin - e.plannedMin);
@@ -799,6 +1019,7 @@
     today.currentTaskRealStart = now;
     today.pausedAt = null;
     today.pausedMsTotal = 0;
+    resetSoundTrackingForCurrentStep();
     await saveActiveRoutine();
     renderActive();
     // Only flash if there's still a next step showing — renderActive() above
@@ -864,6 +1085,7 @@
     today.pausedAt = null;
     today.pausedMsTotal = 0;
     today.lastAction = null;
+    resetSoundTrackingForCurrentStep();
 
     await saveActiveRoutine();
     renderActive();
@@ -931,6 +1153,49 @@
     hideEndStepDialogUI();
     endCurrentStep({ skip:false, overrideActiveMin: minutes });
   });
+
+  // ---------- ADD UNPLANNED STEP ----------
+  // For something urgent that came up and was handled without ever opening
+  // the app — logged retroactively as its own named entry, distinct from
+  // the routine's regular steps, available any time the routine is active
+  // (paused or not).
+  document.getElementById('addUnplannedBtn').addEventListener('click', ()=>{
+    if(!today || today.status !== 'active') return;
+    document.getElementById('unplannedNameInput').value = '';
+    document.getElementById('unplannedMinutesInput').value = '';
+    document.getElementById('unplannedForm').hidden = false;
+    document.getElementById('unplannedNameInput').focus();
+  });
+  document.getElementById('unplannedCancelBtn').addEventListener('click', ()=>{
+    document.getElementById('unplannedForm').hidden = true;
+  });
+  document.getElementById('unplannedConfirmBtn').addEventListener('click', async ()=>{
+    const name = document.getElementById('unplannedNameInput').value.trim();
+    const minutes = Math.max(0, parseFloat(document.getElementById('unplannedMinutesInput').value) || 0);
+    if(!name){ alert('Give it a name.'); return; }
+    document.getElementById('unplannedForm').hidden = true;
+
+    // A stable id derived from the name, so the same typed name recurring
+    // across days lines up as the same row in History (exactly like a
+    // routine step's taskId does) — reuses that entire mechanism for free.
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    today.completedLog.push({
+      taskId: 'unplanned:' + (slug || uid()),
+      name, actualMin: minutes, plannedMin: 0, pausedMin: 0, skipped:false, unplanned:true
+    });
+    // Retroactive pause on the current step — exactly as if a normal pause
+    // of this length had just happened, via the same paused-time mechanism
+    // the live Pause feature uses, so the current step's own active
+    // time/average excludes it. Deliberately does NOT touch the projected-
+    // finish math: that already reads real wall-clock elapsed, which
+    // genuinely did pass, so it's already correct without special-casing.
+    if(today.currentIndex < tasks.length){
+      today.pausedMsTotal = (today.pausedMsTotal || 0) + minutes*60000;
+    }
+    await saveActiveRoutine();
+    renderActive();
+  });
+
   document.getElementById('endBtn').addEventListener('click', ()=>{
     const ok = confirm('End this routine now? Steps not marked done will be left incomplete.');
     if(!ok) return;
@@ -961,7 +1226,8 @@
       routineName: r.name,
       entries: today.completedLog.map(e => ({
         taskId: e.taskId, name: e.name, plannedMin: e.plannedMin,
-        actualMin: e.actualMin, pausedMin: e.pausedMin || 0, skipped: !!e.skipped
+        actualMin: e.actualMin, pausedMin: e.pausedMin || 0, skipped: !!e.skipped,
+        unplanned: !!e.unplanned
       }))
     });
     if(days.length > 60) days.length = 60;
@@ -986,7 +1252,9 @@
     table.innerHTML = '';
     today.completedLog.forEach(e=>{
       const row = document.createElement('tr');
-      if(e.skipped){
+      if(e.unplanned){
+        row.innerHTML = `<td style="font-style:italic;">${escapeAttr(e.name)}</td><td>${Math.round(e.actualMin)}m · unplanned</td>`;
+      } else if(e.skipped){
         row.innerHTML = `<td>${escapeAttr(e.name)}</td><td style="font-style:italic;">skipped</td>`;
       } else {
         const diff = Math.round(e.actualMin - e.plannedMin);
@@ -1055,16 +1323,24 @@
     // historical steps that no longer exist in the current list, in the order
     // they were first encountered. Scanned across ALL stored days (not just
     // the displayed columns) so low/high/avg reflect full history.
-    const rowKeys = r.tasks.map(t => ({ taskId: t.id, label: t.name }));
+    const rowKeys = r.tasks.map(t => ({ taskId: t.id, label: t.name, unplanned:false }));
     const knownIds = new Set(rowKeys.map(x => x.taskId));
     allDays.forEach(day => {
       day.entries.forEach(e => {
         if(!knownIds.has(e.taskId)){
           knownIds.add(e.taskId);
-          rowKeys.push({ taskId: e.taskId, label: e.name });
+          rowKeys.push({ taskId: e.taskId, label: e.name, unplanned: !!e.unplanned });
         }
       });
     });
+
+    // A day's total routine duration — sum of its regular (non-unplanned,
+    // non-skipped) steps' actual minutes. Unplanned interruptions are
+    // deliberately excluded, same as they're excluded from any one step's
+    // own active time: they're not part of the routine's own work.
+    function dayTotalMin(day){
+      return day.entries.filter(e => !e.unplanned && !e.skipped).reduce((s,e) => s + e.actualMin, 0);
+    }
 
     let html = `<div class="hist-wrap"><table class="hist-table"><thead><tr><th>Step</th>`;
     days.forEach(day => {
@@ -1081,14 +1357,29 @@
     days.forEach(day => { html += `<td>${fmtClock(day.finishTime)}</td>`; });
     html += `<td class="stat-sep"></td><td></td><td></td></tr>`;
 
+    // TOTAL row: each visible day's summed actual duration, plus all-time
+    // low/high/avg computed across every day ever logged for this routine
+    // (not just the visible columns) — recomputed fresh from `allDays` on
+    // every render, so deleting a day (via the ✕ above) automatically
+    // updates these with no separate cached numbers anywhere to maintain.
+    html += `<tr class="hist-total-row"><td>Total</td>`;
+    days.forEach(day => { html += `<td>${Math.round(dayTotalMin(day))}</td>`; });
+    const allTotals = allDays.map(dayTotalMin);
+    const totalLow = Math.round(Math.min(...allTotals));
+    const totalHigh = Math.round(Math.max(...allTotals));
+    const totalAvg = Math.round(allTotals.reduce((a,b)=>a+b,0) / allTotals.length);
+    html += `<td class="stat-sep">${totalLow}</td><td>${totalHigh}</td><td>${totalAvg}</td></tr>`;
+
     rowKeys.forEach(rk => {
-      html += `<tr><td>${escapeAttr(rk.label)}</td>`;
+      html += `<tr${rk.unplanned ? ' class="unplanned-row"' : ''}><td>${escapeAttr(rk.label)}</td>`;
       days.forEach(day => {
         const entry = day.entries.find(e => e.taskId === rk.taskId);
         if(!entry){
           html += `<td class="hist-cell na">–</td>`;
         } else if(entry.skipped){
           html += `<td class="hist-cell skip">skip</td>`;
+        } else if(entry.unplanned){
+          html += `<td class="hist-cell even">${Math.round(entry.actualMin)}m</td>`;
         } else {
           const diff = Math.round(entry.actualMin - entry.plannedMin);
           const cls = diff > 0 ? 'over' : (diff < 0 ? 'under' : 'even');
@@ -1112,7 +1403,7 @@
     });
 
     html += `</tbody></table></div>`;
-    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Low/High/Avg are actual minutes across this routine's full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
+    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Total is the day's summed regular-step time (unplanned entries excluded). Low/High/Avg are computed across this routine's full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
     container.innerHTML = html;
 
     container.querySelectorAll('.del-day-btn').forEach(btn=>{
@@ -1173,6 +1464,7 @@
         activeRoutineId = docCache.activeRoutineId || null;
         if(activeRoutineId && !routines.find(r => r.id === activeRoutineId)) activeRoutineId = null;
       }
+      stepLibrary = docCache.stepLibrary || [];
       if(needsMigrationWrite){
         await docRef.set({ routines, activeRoutineId }, { merge: true })
           .catch(e => console.error('migration write failed', e));
@@ -1186,6 +1478,11 @@
       if(resumeTarget){
         loadWorkingStateFrom(resumeTarget);
         persistActiveRoutineId();
+        // Resuming a routine that was already active before this reload —
+        // seed sound-alert tracking with whatever's already reached so it
+        // doesn't burst out every checkpoint missed while the tab was
+        // closed, but still fires new ones going forward.
+        resetSoundTrackingForCurrentStep();
         renderAll();
       } else {
         showRoutineList();
