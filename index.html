@@ -89,12 +89,10 @@
       <div class="card">
         <div class="label">Your routine</div>
         <ul id="taskEditList"></ul>
-        <button class="add-task-btn" id="addTaskBtn">+ Add step</button>
-        <div id="addTaskChooser" hidden>
-          <button class="btn-ghost" id="addBlankStepBtn" style="width:100%; margin-top:12px;">Start blank</button>
-          <div class="label" style="margin-top:16px;">Or pick from your library</div>
-          <ul id="libraryPickerList"></ul>
-        </div>
+        <select id="addStepSelect" class="history-routine-select" style="margin-top:10px; margin-bottom:0;">
+          <option value="">+ Add step from library…</option>
+        </select>
+        <button class="btn-ghost" id="goToLibraryFromSetupBtn" style="width:100%; margin-top:10px;" hidden>Your library is empty — add steps there first</button>
       </div>
 
       <div class="card">
@@ -180,7 +178,11 @@
 
       <div class="card" id="unplannedForm" hidden>
         <div class="label">What happened?</div>
-        <input type="text" id="unplannedNameInput" class="routine-name-input" style="font-size:16px;" placeholder="e.g. Unexpected phone call">
+        <select id="unplannedLibrarySelect" class="history-routine-select" style="margin-bottom:10px;">
+          <option value="">Select from library…</option>
+        </select>
+        <div class="preview-line" style="text-align:center; margin:0 0 10px;">— or —</div>
+        <input type="text" id="unplannedNameInput" class="routine-name-input" style="font-size:16px;" placeholder="Type a new name">
         <div class="settings-row" style="margin-top:12px;">
           <label for="unplannedMinutesInput">Took about</label>
           <div class="minutes-input-wrap">

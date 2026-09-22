@@ -408,10 +408,14 @@
       document.getElementById(s).hidden = (s !== id);
     });
     // The header's "Edit" pill only makes sense once a specific routine is
-    // open and not already being edited; "Library" only where adding a step
-    // is relevant. The two are never both shown at once.
+    // open and not already being edited. "Library" is reachable from the
+    // list, setup, AND the active screen — visiting it mid-routine must not
+    // disrupt the live timer, which it doesn't: the active screen's tick
+    // keeps running in the background (elapsed/pause math is all real
+    // timestamps, independent of which screen is currently visible), it's
+    // just not what's on screen for a moment.
     document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup' || id === 'screen-library');
-    document.getElementById('libraryBtn').hidden = !(id === 'screen-routines' || id === 'screen-setup');
+    document.getElementById('libraryBtn').hidden = !(id === 'screen-routines' || id === 'screen-setup' || id === 'screen-active');
   }
 
   function renderAll(){
@@ -540,21 +544,26 @@
 
   // ---------- STEP LIBRARY screen ----------
   // Purely a source of starting defaults for the "+ Add step" picker on a
-  // routine's setup screen — see renderLibraryPickerList(). Never read by
+  // routine's setup screen — see populateAddStepSelect(). Never read by
   // any routine/history/projection logic, and never written to by it either;
   // a routine's own steps are independent copies made once, at add-time.
-  let libraryScreenReturnTo = 'screen-routines'; // where "← Back" goes
-  function showLibrary(returnTo){
-    libraryScreenReturnTo = returnTo;
+  // Reachable from the routine list, a routine's setup screen, AND mid-run
+  // from the active screen — the back button's label and destination are
+  // decided fresh each time from live state (today/activeRoutineId), not a
+  // remembered "where did I come from" flag, so it's always accurate even
+  // if that state changed while the library was open (e.g. the routine
+  // finished on its own while browsing).
+  function showLibrary(){
     renderLibrary();
+    const backBtn = document.getElementById('backFromLibraryBtn');
+    if(today && today.status === 'active') backBtn.textContent = '← Back to active routine';
+    else if(activeRoutineId) backBtn.textContent = '← Back to routine';
+    else backBtn.textContent = '← All routines';
     showScreen('screen-library');
   }
-  document.getElementById('libraryBtn').addEventListener('click', () => {
-    showLibrary(today || activeRoutineId ? 'screen-setup' : 'screen-routines');
-  });
+  document.getElementById('libraryBtn').addEventListener('click', showLibrary);
   document.getElementById('backFromLibraryBtn').addEventListener('click', () => {
-    if(libraryScreenReturnTo === 'screen-setup' && activeRoutineId){ renderAll(); }
-    else { showRoutineList(); }
+    if(activeRoutineId){ renderAll(); } else { showRoutineList(); }
   });
 
   function renderLibrary(){
@@ -601,7 +610,7 @@
   function renderSetup(){
     document.getElementById('routineNameInput').value = routineName;
     document.getElementById('targetLabelInput').value = settings.targetLabel;
-    document.getElementById('addTaskChooser').hidden = true;
+    populateAddStepSelect();
 
     if(justDuplicatedRoutineId && justDuplicatedRoutineId === activeRoutineId){
       justDuplicatedRoutineId = null;
@@ -675,27 +684,24 @@
     updateSetupPreview();
   }
 
-  function renderLibraryPickerList(){
-    const list = document.getElementById('libraryPickerList');
-    list.innerHTML = '';
-    if(stepLibrary.length === 0){
-      const li = document.createElement('li');
-      li.className = 'hist-empty';
-      li.textContent = 'Your library is empty — add steps to it from the Library screen.';
-      list.appendChild(li);
-      return;
-    }
+  // Library is REQUIRED to add a step on a routine's setup screen — no
+  // "start blank" option here (that's only still allowed from the
+  // unplanned-step flow, since the whole point there is handling something
+  // in the moment without a library detour). A native <select> matches
+  // Strength Tracker's own movement picker exactly, including its built-in
+  // type-to-jump search.
+  function populateAddStepSelect(){
+    const select = document.getElementById('addStepSelect');
+    select.innerHTML = '<option value="">+ Add step from library…</option>';
     stepLibrary.forEach(item=>{
-      const li = document.createElement('li');
-      li.className = 'routine-list-item';
-      li.innerHTML = `<span class="name">${escapeAttr(item.name)}</span><span class="time">${Math.round(item.baseEst)} min</span>`;
-      li.addEventListener('click', ()=>{
-        tasks.push({ id: uid(), name: item.name, baseEst: item.baseEst });
-        document.getElementById('addTaskChooser').hidden = true;
-        persistTasks(); renderSetup();
-      });
-      list.appendChild(li);
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = `${item.name} (${Math.round(item.baseEst)} min)`;
+      select.appendChild(opt);
     });
+    const emptyHintBtn = document.getElementById('goToLibraryFromSetupBtn');
+    select.hidden = stepLibrary.length === 0;
+    emptyHintBtn.hidden = stepLibrary.length > 0;
   }
 
   function updateSetupPreview(){
@@ -723,16 +729,15 @@
   });
   document.getElementById('targetLabelInput').addEventListener('blur', persistTasks);
 
-  document.getElementById('addTaskBtn').addEventListener('click', ()=>{
-    const chooser = document.getElementById('addTaskChooser');
-    chooser.hidden = !chooser.hidden;
-    if(!chooser.hidden) renderLibraryPickerList();
-  });
-  document.getElementById('addBlankStepBtn').addEventListener('click', ()=>{
-    tasks.push({id: uid(), name:'New step', baseEst:10});
-    document.getElementById('addTaskChooser').hidden = true;
+  document.getElementById('addStepSelect').addEventListener('change', e=>{
+    const id = e.target.value;
+    if(!id) return;
+    const item = stepLibrary.find(x => x.id === id);
+    if(item) tasks.push({ id: uid(), name: item.name, baseEst: item.baseEst });
+    e.target.value = ''; // reset to placeholder — this select is an action trigger, not persistent state
     persistTasks(); renderSetup();
   });
+  document.getElementById('goToLibraryFromSetupBtn').addEventListener('click', showLibrary);
   document.getElementById('targetTimeInput').addEventListener('change', e=>{
     settings.targetTime = e.target.value;
     persistTasks(); updateSetupPreview();
@@ -1158,22 +1163,66 @@
   // For something urgent that came up and was handled without ever opening
   // the app — logged retroactively as its own named entry, distinct from
   // the routine's regular steps, available any time the routine is active
-  // (paused or not).
+  // (paused or not). Two ways to name it: pick an existing library step
+  // (same idea as the routine-setup picker), or type a brand-new name on
+  // the spot — the one place library-first isn't required, since the whole
+  // point of this path is handling something unplanned in the moment.
+  let unplannedSelectedLibraryId = null;
+
+  function populateUnplannedLibrarySelect(){
+    const select = document.getElementById('unplannedLibrarySelect');
+    select.innerHTML = '<option value="">Select from library…</option>';
+    stepLibrary.forEach(item=>{
+      const opt = document.createElement('option');
+      opt.value = item.id;
+      opt.textContent = `${item.name} (${Math.round(item.baseEst)} min)`;
+      select.appendChild(opt);
+    });
+  }
+
   document.getElementById('addUnplannedBtn').addEventListener('click', ()=>{
     if(!today || today.status !== 'active') return;
+    unplannedSelectedLibraryId = null;
     document.getElementById('unplannedNameInput').value = '';
     document.getElementById('unplannedMinutesInput').value = '';
+    populateUnplannedLibrarySelect();
     document.getElementById('unplannedForm').hidden = false;
     document.getElementById('unplannedNameInput').focus();
   });
   document.getElementById('unplannedCancelBtn').addEventListener('click', ()=>{
     document.getElementById('unplannedForm').hidden = true;
   });
+  document.getElementById('unplannedLibrarySelect').addEventListener('change', e=>{
+    const id = e.target.value;
+    if(!id) return;
+    const item = stepLibrary.find(x => x.id === id);
+    if(!item) return;
+    unplannedSelectedLibraryId = id;
+    document.getElementById('unplannedNameInput').value = item.name;
+    document.getElementById('unplannedMinutesInput').value = Math.round(item.baseEst);
+  });
+  document.getElementById('unplannedNameInput').addEventListener('input', ()=>{
+    // Typing manually breaks the "picked from library" link — only a
+    // genuinely new typed name gets auto-saved to the library on confirm.
+    unplannedSelectedLibraryId = null;
+  });
   document.getElementById('unplannedConfirmBtn').addEventListener('click', async ()=>{
     const name = document.getElementById('unplannedNameInput').value.trim();
     const minutes = Math.max(0, parseFloat(document.getElementById('unplannedMinutesInput').value) || 0);
     if(!name){ alert('Give it a name.'); return; }
     document.getElementById('unplannedForm').hidden = true;
+
+    // A brand-new typed name (not selected from the library) is saved
+    // there automatically, using this instance's duration as its starting
+    // "usual" default — available to pick from next time, in either place.
+    // Guarded against a duplicate if the typed name happens to already
+    // match an existing entry verbatim.
+    const alreadyInLibrary = stepLibrary.some(x => x.name.trim().toLowerCase() === name.toLowerCase());
+    if(!unplannedSelectedLibraryId && !alreadyInLibrary){
+      stepLibrary.push({ id: uid(), name, baseEst: Math.max(1, Math.round(minutes) || 1) });
+      persistStepLibrary();
+    }
+    unplannedSelectedLibraryId = null;
 
     // A stable id derived from the name, so the same typed name recurring
     // across days lines up as the same row in History (exactly like a
