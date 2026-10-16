@@ -547,10 +547,13 @@
   }
 
   // ---------- ROUTINE LIST screen ----------
+  // Most recent of: when the routine was created, or when it was last
+  // started. Routines from before createdAt existed have only their start
+  // times (or 0 if never started); ties fall back to array order, where later
+  // = added more recently.
   function routineSortKey(r){
-    if(r.today && r.today.startTime) return r.today.startTime;
-    if(r.days && r.days.length) return r.days[0].startTime;
-    return 0;
+    const started = (r.today && r.today.startTime) || (r.days && r.days.length && r.days[0].startTime) || 0;
+    return Math.max(r.createdAt || 0, r.lastStartedAt || 0, started);
   }
 
   function showRoutineList(){
@@ -565,7 +568,9 @@
   function renderRoutineList(){
     const list = document.getElementById('routineList');
     list.innerHTML = '';
-    const sorted = [...routines].sort((a,b) => routineSortKey(b) - routineSortKey(a));
+    const sorted = routines.map((r, i) => ({ r, i, k: routineSortKey(r) }))
+      .sort((a,b) => (b.k - a.k) || (b.i - a.i))
+      .map(x => x.r);
     if(sorted.length === 0){
       const li = document.createElement('li');
       li.className = 'hist-empty';
@@ -601,6 +606,7 @@
     return { id: uid(), name: '', targetLabel: '', targetTime: '09:00', tasks: [], today: null, days: [] };
   }
   async function addRoutineAndOpen(r){
+    r.createdAt = Date.now();
     routines.push(r);
     await persistRoutines();
     openRoutine(r.id);
@@ -932,6 +938,11 @@
       completedLog: []
     };
     resetSoundTrackingForCurrentStep();
+    // Remembered on the routine itself so the list order still reflects this
+    // start even if the run is later ended without any step being logged
+    // (which saves no day record).
+    const activeR = getActiveRoutine();
+    if(activeR) activeR.lastStartedAt = now;
     await persistTasks();
     renderAll();
   });
