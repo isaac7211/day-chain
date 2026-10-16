@@ -183,11 +183,24 @@
         </select>
         <div class="preview-line" style="text-align:center; margin:0 0 10px;">— or —</div>
         <input type="text" id="unplannedNameInput" class="routine-name-input" style="font-size:16px;" placeholder="Type a new name">
-        <div class="settings-row" style="margin-top:12px;">
-          <label for="unplannedMinutesInput">Took about</label>
-          <div class="minutes-input-wrap">
-            <input type="number" id="unplannedMinutesInput" min="0" inputmode="decimal">
-            <span class="unit">min</span>
+        <div class="choice-group" role="radiogroup" aria-label="How long did it take?">
+          <label class="choice-row">
+            <input type="radio" name="unplannedMode" value="enter" checked>
+            <span>Enter the time it took</span>
+          </label>
+          <div class="settings-row choice-detail" id="unplannedEnterRow">
+            <label for="unplannedMinutesInput">Took about</label>
+            <div class="minutes-input-wrap">
+              <input type="number" id="unplannedMinutesInput" min="0" inputmode="decimal">
+              <span class="unit">min</span>
+            </div>
+          </div>
+          <label class="choice-row">
+            <input type="radio" name="unplannedMode" value="all">
+            <span>Use all of this step's time so far</span>
+          </label>
+          <div class="choice-detail preview-line" id="unplannedAllRow" hidden>
+            <b id="unplannedAllAmount">Use 0 min</b> — this step then starts over from 0:00.
           </div>
         </div>
         <div class="btn-row">

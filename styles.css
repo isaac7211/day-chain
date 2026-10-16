@@ -475,3 +475,15 @@ ul{ list-style:none; margin:0; padding:0; }
   color: var(--coral);
   margin-top:14px;
 }
+
+/* UNPLANNED STEP: time choice */
+.choice-group{ margin-top:14px; margin-bottom:14px; }
+.choice-row{
+  display:flex; align-items:center; gap:10px;
+  font-size:14px; color: var(--text);
+  padding: 6px 0; cursor:pointer;
+}
+.choice-row input[type=radio]{ accent-color: var(--sage); width:18px; height:18px; margin:0; flex-shrink:0; }
+.choice-detail{ margin: 2px 0 8px 28px; }
+.choice-detail.settings-row{ margin-bottom:8px; }
+.summary-table tr.summary-total-row td{ font-weight:700; color: var(--text); border-top: 1px solid var(--border); }

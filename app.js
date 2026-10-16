@@ -71,10 +71,15 @@
     try{ await docRef.set({ activeRoutineId }, { merge: true }); }
     catch(e){ console.error('firestore set failed', 'activeRoutineId', e); }
   }
+  // Library items still being typed (created by "+ Add step to library" but
+  // never given a name) live in memory only — they're never written out, so
+  // a nameless item can't reach Firestore or any picker.
+  function namedLibrary(){ return stepLibrary.filter(x => x.name && x.name.trim()); }
   async function persistStepLibrary(){
     if(!docRef) return;
-    docCache.stepLibrary = stepLibrary;
-    try{ await docRef.set({ stepLibrary }, { merge: true }); }
+    const toSave = namedLibrary();
+    docCache.stepLibrary = toSave;
+    try{ await docRef.set({ stepLibrary: toSave }, { merge: true }); }
     catch(e){ console.error('firestore set failed', 'stepLibrary', e); }
   }
   // Writes the working copy (tasks/settings/name/today) back into the open
@@ -96,6 +101,73 @@
   // buttons) actually show up on iPhone.
   document.addEventListener('touchstart', function(){}, { passive: true });
 
+  // ---------- INPUT BEHAVIOR ----------
+  // 1) Number fields select their whole value on focus/tap, so typing
+  //    replaces it. A bare select() on focus is unreliable on iOS Safari:
+  //    the caret gets placed AFTER focus fires (on touchend / the synthesized
+  //    click), collapsing the selection. So selection is re-applied across a
+  //    few ticks and again on the tap's own click/touchend, for a short
+  //    window right after focus only (so a later deliberate tap isn't
+  //    fought). setSelectionRange is a fallback — it throws on type=number in
+  //    some browsers, hence the try/catch around each call.
+  let lastFocusedNumber = null, lastFocusedNumberAt = 0;
+  function selectAllNumber(el){
+    try{ el.select(); }catch(_){}
+    try{ el.setSelectionRange(0, 9999); }catch(_){}
+  }
+  document.addEventListener('focusin', e=>{
+    const el = e.target;
+    if(!(el instanceof HTMLInputElement) || el.type !== 'number') return;
+    lastFocusedNumber = el; lastFocusedNumberAt = Date.now();
+    selectAllNumber(el);
+    requestAnimationFrame(() => selectAllNumber(el));
+    setTimeout(() => selectAllNumber(el), 0);
+    setTimeout(() => selectAllNumber(el), 60);
+  });
+  ['click', 'touchend', 'mouseup'].forEach(type => {
+    document.addEventListener(type, e=>{
+      const el = e.target;
+      if(el !== lastFocusedNumber || Date.now() - lastFocusedNumberAt > 500) return;
+      // Stop a desktop mouse-up from dropping the caret in. Never on
+      // touchend: cancelling that would swallow the click that focuses.
+      if(type === 'mouseup') e.preventDefault();
+      selectAllNumber(el);
+      setTimeout(() => selectAllNumber(el), 0);
+    }, true);
+  });
+
+  // 2) Reduce the browser/iOS text-undo behavior ("Undo Typing" /
+  //    shake-to-undo). Every text-like input gets autocomplete/autocorrect/
+  //    spellcheck off (a MutationObserver covers inputs created later by
+  //    render functions), and the undo/redo input events themselves are
+  //    cancelled. This is only the browser's TEXT undo — the app's own
+  //    "undo last ended step" button is untouched.
+  function hardenInput(el){
+    const type = (el.getAttribute('type') || 'text').toLowerCase();
+    if(el.tagName !== 'TEXTAREA' && !['text','search','number','email','url','tel'].includes(type)) return;
+    el.setAttribute('autocomplete', 'off');
+    el.setAttribute('autocorrect', 'off');
+    el.setAttribute('spellcheck', 'false');
+    if(!el.hasAttribute('autocapitalize')) el.setAttribute('autocapitalize', type === 'number' ? 'off' : 'sentences');
+  }
+  document.querySelectorAll('input, textarea').forEach(hardenInput);
+  new MutationObserver(muts => {
+    muts.forEach(m => m.addedNodes.forEach(n => {
+      if(n.nodeType !== 1) return;
+      if(n.matches('input, textarea')) hardenInput(n);
+      n.querySelectorAll('input, textarea').forEach(hardenInput);
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('beforeinput', e=>{
+    if(e.inputType === 'historyUndo' || e.inputType === 'historyRedo') e.preventDefault();
+  }, true);
+  document.addEventListener('keydown', e=>{
+    if((e.metaKey || e.ctrlKey) && e.key && e.key.toLowerCase() === 'z'){
+      const t = e.target;
+      if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) e.preventDefault();
+    }
+  }, true);
+
   function uid(){ return 't' + Math.random().toString(36).slice(2,9); }
   function todayStr(){ return new Date().toDateString(); }
   function fmtClock(ms){
@@ -105,10 +177,29 @@
     h = h % 12; if(h === 0) h = 12;
     return h + ':' + String(m).padStart(2,'0') + ' ' + ampm;
   }
+  // Live-timer format: m:ss, switching to h:mm:ss once past an hour.
   function fmtMMSS(ms){
     const totalSec = Math.max(0, Math.floor(ms/1000));
-    const m = Math.floor(totalSec/60), s = totalSec%60;
+    const h = Math.floor(totalSec/3600);
+    const m = Math.floor((totalSec%3600)/60), s = totalSec%60;
+    if(h > 0) return h + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
     return m + ':' + String(s).padStart(2,'0');
+  }
+  // The one shared format for accrued/aggregate durations: "45 min",
+  // "1 hr", "4 hr 30 min". Input is minutes; rounds to whole minutes first
+  // so 59.6 becomes "1 hr", not "60 min".
+  function fmtDuration(minutes){
+    const total = Math.max(0, Math.round(minutes || 0));
+    if(total < 60) return total + ' min';
+    const h = Math.floor(total / 60), m = total % 60;
+    return m === 0 ? h + ' hr' : h + ' hr ' + m + ' min';
+  }
+  // A routine can now be saved with an empty name (the field shows a
+  // placeholder instead of real default text), so anywhere a name is
+  // displayed falls back to this.
+  function routineDisplayName(nameOrRoutine){
+    const n = typeof nameOrRoutine === 'string' ? nameOrRoutine : (nameOrRoutine && nameOrRoutine.name);
+    return (n && n.trim()) ? n : 'Untitled routine';
   }
   function plannedMinFor(task){
     return task.baseEst;
@@ -124,6 +215,14 @@
     return d.getTime();
   }
   function escapeAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+  // Never rewrite an input's value to what it already holds — assigning
+  // .value programmatically (especially while the field is focused) resets
+  // the browser's native text-undo stack and is a classic trigger for iOS's
+  // "Undo Typing" shake dialog.
+  function setInputValue(el, v){
+    const next = v == null ? '' : String(v);
+    if(el.value !== next) el.value = next;
+  }
   // Compact "Np" annotation for a step's paused time, wherever its actual
   // time is already shown — blank when there was no pause, so unpaused
   // steps look exactly as they always have.
@@ -444,7 +543,7 @@
 
   function applyRoutineHeroCopy(){
     document.getElementById('heroEyebrow').textContent = `Projected ${settings.targetLabel || 'target'}`;
-    document.getElementById('summaryLabel').textContent = routineName || 'Summary';
+    document.getElementById('summaryLabel').textContent = routineDisplayName(routineName);
   }
 
   // ---------- ROUTINE LIST screen ----------
@@ -477,7 +576,7 @@
       const total = r.tasks.reduce((s,t) => s + t.baseEst, 0);
       const li = document.createElement('li');
       li.className = 'routine-list-item';
-      li.innerHTML = `<span class="name">${escapeAttr(r.name)}</span><span class="time">${Math.round(total)} min</span>`;
+      li.innerHTML = `<span class="name">${escapeAttr(routineDisplayName(r))}</span><span class="time">${fmtDuration(total)}</span>`;
       li.addEventListener('click', () => openRoutine(r.id));
       list.appendChild(li);
     });
@@ -487,7 +586,7 @@
   function duplicateRoutineObj(src){
     return {
       id: uid(),
-      name: src.name + ' copy',
+      name: routineDisplayName(src) + ' copy',
       targetLabel: src.targetLabel,
       targetTime: src.targetTime,
       tasks: src.tasks.map(t => ({ id: uid(), name: t.name, baseEst: t.baseEst })),
@@ -496,7 +595,10 @@
     };
   }
   function createBlankRoutineObj(){
-    return { id: uid(), name: 'New routine', targetLabel: 'Target time', targetTime: '09:00', tasks: [], today: null, days: [] };
+    // Name and target label start empty — their inputs show greyed
+    // placeholders ("Routine name" / "Target label") rather than real text
+    // the user would have to delete before typing.
+    return { id: uid(), name: '', targetLabel: '', targetTime: '09:00', tasks: [], today: null, days: [] };
   }
   async function addRoutineAndOpen(r){
     routines.push(r);
@@ -516,7 +618,7 @@
     routines.forEach(r => {
       const li = document.createElement('li');
       li.className = 'routine-list-item';
-      li.innerHTML = `<span class="name">${escapeAttr(r.name)}</span>`;
+      li.innerHTML = `<span class="name">${escapeAttr(routineDisplayName(r))}</span>`;
       li.addEventListener('click', () => duplicateAndOpen(r));
       list.appendChild(li);
     });
@@ -563,8 +665,23 @@
   }
   document.getElementById('libraryBtn').addEventListener('click', showLibrary);
   document.getElementById('backFromLibraryBtn').addEventListener('click', () => {
+    // iOS doesn't blur a focused input when a button is tapped, so drop any
+    // still-nameless draft here rather than relying on blur having fired.
+    stepLibrary = namedLibrary();
     if(activeRoutineId){ renderAll(); } else { showRoutineList(); }
   });
+
+  // Ids of library items that were just added and have never held a name —
+  // leaving one of these empty discards it, whereas clearing the name of an
+  // established item just restores its old name.
+  const libraryDraftIds = new Set();
+
+  function discardEmptyDraft(item){
+    libraryDraftIds.delete(item.id);
+    const i = stepLibrary.indexOf(item);
+    if(i >= 0) stepLibrary.splice(i, 1);
+    renderLibrary();
+  }
 
   function renderLibrary(){
     const list = document.getElementById('libraryList');
@@ -579,7 +696,8 @@
       const li = document.createElement('li');
       li.className = 'task-row';
       li.innerHTML = `
-        <input type="text" value="${escapeAttr(item.name)}" data-idx="${idx}" class="lib-name-input">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
+        <input type="text" value="${escapeAttr(item.name)}" data-idx="${idx}" data-prev="${escapeAttr(item.name)}" class="lib-name-input" placeholder="New step">
         <input type="number" min="1" value="${item.baseEst}" data-idx="${idx}" class="lib-min-input">
         <span class="unit">min</span>
         <button class="icon-btn remove-btn" data-idx="${idx}">✕</button>
@@ -587,29 +705,78 @@
       list.appendChild(li);
     });
     list.querySelectorAll('.lib-name-input').forEach(inp=>{
-      inp.addEventListener('input', e=>{ stepLibrary[+e.target.dataset.idx].name = e.target.value; });
-      inp.addEventListener('blur', persistStepLibrary);
+      inp.addEventListener('input', e=>{
+        // Only a non-empty name is written live, so a half-cleared field
+        // can't leave an established item nameless if the user taps away.
+        if(e.target.value.trim()) stepLibrary[+e.target.dataset.idx].name = e.target.value;
+      });
+      inp.addEventListener('blur', e=>{
+        const item = stepLibrary[+e.target.dataset.idx];
+        if(!item) return;
+        const v = e.target.value.trim();
+        if(v){
+          item.name = v;
+          e.target.dataset.prev = v;
+          libraryDraftIds.delete(item.id);
+          persistStepLibrary();
+        } else if(libraryDraftIds.has(item.id)){
+          // Tapping over to this row's own minutes field isn't abandoning it.
+          if(e.relatedTarget && e.relatedTarget.closest('li') === e.target.closest('li')) return;
+          discardEmptyDraft(item);
+        } else {
+          e.target.value = e.target.dataset.prev || item.name;
+        }
+      });
     });
     list.querySelectorAll('.lib-min-input').forEach(inp=>{
       inp.addEventListener('input', e=>{
         stepLibrary[+e.target.dataset.idx].baseEst = Math.max(1, parseInt(e.target.value)||1);
       });
-      inp.addEventListener('blur', persistStepLibrary);
+      inp.addEventListener('blur', e=>{
+        const item = stepLibrary[+e.target.dataset.idx];
+        const sameRow = e.relatedTarget && e.relatedTarget.closest('li') === e.target.closest('li');
+        if(item && libraryDraftIds.has(item.id) && !item.name.trim() && !sameRow){ discardEmptyDraft(item); return; }
+        persistStepLibrary();
+      });
     });
     list.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click', e=>{
+      libraryDraftIds.delete(stepLibrary[+e.target.dataset.idx].id);
       stepLibrary.splice(+e.target.dataset.idx, 1);
       persistStepLibrary(); renderLibrary();
     }));
+
+    // Same drag-and-drop pattern as a routine's step list (see renderSetup):
+    // handle-only dragging, destroy-before-recreate since this <ul> persists
+    // across renders. The array order IS the saved order — no extra field.
+    const existingSortable = Sortable.get(list);
+    if(existingSortable) existingSortable.destroy();
+    Sortable.create(list, {
+      handle: '.drag-handle',
+      animation: 150,
+      onEnd: (evt) => {
+        if(evt.oldIndex === evt.newIndex) return;
+        const [moved] = stepLibrary.splice(evt.oldIndex, 1);
+        stepLibrary.splice(evt.newIndex, 0, moved);
+        persistStepLibrary();
+        renderLibrary();
+      }
+    });
   }
   document.getElementById('addLibraryStepBtn').addEventListener('click', ()=>{
-    stepLibrary.push({ id: uid(), name: 'New step', baseEst: 10 });
-    persistStepLibrary(); renderLibrary();
+    // Starts empty — the field shows "New step" as a greyed placeholder, so
+    // the user can type immediately instead of deleting real default text.
+    const item = { id: uid(), name: '', baseEst: 10 };
+    libraryDraftIds.add(item.id);
+    stepLibrary.push(item);
+    renderLibrary();
+    const inputs = document.querySelectorAll('#libraryList .lib-name-input');
+    if(inputs.length) inputs[inputs.length - 1].focus();
   });
 
   // ---------- SETUP screen ----------
   function renderSetup(){
-    document.getElementById('routineNameInput').value = routineName;
-    document.getElementById('targetLabelInput').value = settings.targetLabel;
+    setInputValue(document.getElementById('routineNameInput'), routineName);
+    setInputValue(document.getElementById('targetLabelInput'), settings.targetLabel);
     populateAddStepSelect();
 
     if(justDuplicatedRoutineId && justDuplicatedRoutineId === activeRoutineId){
@@ -679,7 +846,7 @@
       }
     });
 
-    document.getElementById('targetTimeInput').value = settings.targetTime;
+    setInputValue(document.getElementById('targetTimeInput'), settings.targetTime);
     renderDeleteRoutineSection();
     updateSetupPreview();
   }
@@ -693,15 +860,16 @@
   function populateAddStepSelect(){
     const select = document.getElementById('addStepSelect');
     select.innerHTML = '<option value="">+ Add step from library…</option>';
-    stepLibrary.forEach(item=>{
+    const named = namedLibrary();
+    named.forEach(item=>{
       const opt = document.createElement('option');
       opt.value = item.id;
       opt.textContent = `${item.name} (${Math.round(item.baseEst)} min)`;
       select.appendChild(opt);
     });
     const emptyHintBtn = document.getElementById('goToLibraryFromSetupBtn');
-    select.hidden = stepLibrary.length === 0;
-    emptyHintBtn.hidden = stepLibrary.length > 0;
+    select.hidden = named.length === 0;
+    emptyHintBtn.hidden = named.length > 0;
   }
 
   function updateSetupPreview(){
@@ -711,7 +879,7 @@
     document.getElementById('setupPreview').innerHTML =
       `If you start right now, you'd finish around <b>${fmtClock(finish)}</b>.`;
     document.getElementById('setupTotal').textContent =
-      `Total routine: ${Math.round(totalMin)} min across ${tasks.length} step${tasks.length===1?'':'s'}`;
+      `Total routine: ${fmtDuration(totalMin)} across ${tasks.length} step${tasks.length===1?'':'s'}`;
 
     const startByMs = targetMsForToday() - totalMin*60000;
     document.getElementById('startByPreview').innerHTML =
@@ -787,7 +955,7 @@
     section.hidden = false;
     const warning = document.createElement('div');
     warning.className = 'delete-warning';
-    warning.textContent = `Delete "${routineName}" and all its history? This can't be undone.`;
+    warning.textContent = `Delete "${routineDisplayName(routineName)}" and all its history? This can't be undone.`;
     section.appendChild(warning);
 
     const row = document.createElement('div');
@@ -858,10 +1026,10 @@
       badge.textContent = `Right on your ${settings.targetTime} target`;
       badge.className = 'delta-badge onpace';
     } else if(deltaMin > 0){
-      badge.textContent = `${deltaMin} min after your ${settings.targetTime} target`;
+      badge.textContent = `${fmtDuration(deltaMin)} after your ${settings.targetTime} target`;
       badge.className = 'delta-badge behind';
     } else {
-      badge.textContent = `${Math.abs(deltaMin)} min ahead of your ${settings.targetTime} target`;
+      badge.textContent = `${fmtDuration(Math.abs(deltaMin))} ahead of your ${settings.targetTime} target`;
       badge.className = 'delta-badge ahead';
     }
 
@@ -966,6 +1134,8 @@
     } else {
       completedCard.hidden = true;
     }
+
+    if(!document.getElementById('unplannedForm').hidden && unplannedMode() === 'all') updateUnplannedAllAmount();
 
     if(!inRoutine){
       finishRoutine();
@@ -1079,7 +1249,13 @@
     // The just-ended entry is always the last one pushed to completedLog —
     // remove it so it's fully retracted (it was never part of any saved
     // day/average yet; that only happens when the whole routine finishes).
-    today.completedLog.pop();
+    // (Not simply the last element: an unplanned entry logged after the step
+    // ended sits at the end, and must stay.)
+    let endedIdx = -1;
+    for(let i = today.completedLog.length - 1; i >= 0; i--){
+      if(!today.completedLog[i].unplanned){ endedIdx = i; break; }
+    }
+    if(endedIdx >= 0) today.completedLog.splice(endedIdx, 1);
 
     today.currentIndex = la.index;
     // Back-date the start so elapsed-since-start equals the restored active
@@ -1172,7 +1348,7 @@
   function populateUnplannedLibrarySelect(){
     const select = document.getElementById('unplannedLibrarySelect');
     select.innerHTML = '<option value="">Select from library…</option>';
-    stepLibrary.forEach(item=>{
+    namedLibrary().forEach(item=>{
       const opt = document.createElement('option');
       opt.value = item.id;
       opt.textContent = `${item.name} (${Math.round(item.baseEst)} min)`;
@@ -1180,15 +1356,39 @@
     });
   }
 
+  function unplannedMode(){
+    return document.querySelector('input[name="unplannedMode"]:checked').value;
+  }
+  // Everything that has happened on the current step so far, in minutes —
+  // active time PLUS all paused time (recorded segments and any pause still
+  // in progress), i.e. plain wall-clock time since the step's start anchor.
+  // All of it counts as having been spent on the unplanned thing.
+  function currentStepAllTimeMin(){
+    if(!today || today.currentIndex >= tasks.length) return 0;
+    return Math.max(0, (Date.now() - today.currentTaskStart) / 60000);
+  }
+  function updateUnplannedAllAmount(){
+    document.getElementById('unplannedAllAmount').textContent = 'Use ' + fmtDuration(currentStepAllTimeMin());
+  }
+  function syncUnplannedMode(){
+    const all = unplannedMode() === 'all';
+    document.getElementById('unplannedEnterRow').hidden = all;
+    document.getElementById('unplannedAllRow').hidden = !all;
+    if(all) updateUnplannedAllAmount();
+  }
+
   document.getElementById('addUnplannedBtn').addEventListener('click', ()=>{
     if(!today || today.status !== 'active') return;
     unplannedSelectedLibraryId = null;
-    document.getElementById('unplannedNameInput').value = '';
-    document.getElementById('unplannedMinutesInput').value = '';
+    setInputValue(document.getElementById('unplannedNameInput'), '');
+    setInputValue(document.getElementById('unplannedMinutesInput'), '');
+    document.querySelector('input[name="unplannedMode"][value="enter"]').checked = true;
+    syncUnplannedMode();
     populateUnplannedLibrarySelect();
     document.getElementById('unplannedForm').hidden = false;
     document.getElementById('unplannedNameInput').focus();
   });
+  document.querySelectorAll('input[name="unplannedMode"]').forEach(r => r.addEventListener('change', syncUnplannedMode));
   document.getElementById('unplannedCancelBtn').addEventListener('click', ()=>{
     document.getElementById('unplannedForm').hidden = true;
   });
@@ -1208,8 +1408,14 @@
   });
   document.getElementById('unplannedConfirmBtn').addEventListener('click', async ()=>{
     const name = document.getElementById('unplannedNameInput').value.trim();
-    const minutes = Math.max(0, parseFloat(document.getElementById('unplannedMinutesInput').value) || 0);
+    const useAll = unplannedMode() === 'all';
+    // "Use all" is computed at the moment of confirming, not when the form
+    // was opened, so the entry takes exactly what has elapsed by now.
+    const minutes = useAll
+      ? currentStepAllTimeMin()
+      : Math.max(0, parseFloat(document.getElementById('unplannedMinutesInput').value) || 0);
     if(!name){ alert('Give it a name.'); return; }
+    if(useAll && minutes <= 0){ alert("This step has no time on it yet."); return; }
     document.getElementById('unplannedForm').hidden = true;
 
     // A brand-new typed name (not selected from the library) is saved
@@ -1232,17 +1438,33 @@
       taskId: 'unplanned:' + (slug || uid()),
       name, actualMin: minutes, plannedMin: 0, pausedMin: 0, skipped:false, unplanned:true
     });
-    // Retroactive pause on the current step — exactly as if a normal pause
-    // of this length had just happened, via the same paused-time mechanism
-    // the live Pause feature uses, so the current step's own active
-    // time/average excludes it. Deliberately does NOT touch the projected-
-    // finish math: that already reads real wall-clock elapsed, which
-    // genuinely did pass, so it's already correct without special-casing.
-    if(today.currentIndex < tasks.length){
+    if(useAll){
+      // Option b: the current step's entire elapsed time moved into the
+      // unplanned entry above, so the step starts over from zero. Fresh
+      // start anchors, ALL pause bookkeeping cleared (recorded segments and
+      // any in-progress pause — that time went into the entry, so none of
+      // it may linger on the step or count toward its logged actual), and
+      // the sound schedule re-seeded against its planned duration. The
+      // projection needs no special handling: it reads real wall-clock
+      // time, so it simply becomes now + the step's full planned time.
+      const now = Date.now();
+      today.currentTaskStart = now;
+      today.currentTaskRealStart = now;
+      today.pausedAt = null;
+      today.pausedMsTotal = 0;
+      resetSoundTrackingForCurrentStep();
+    } else if(today.currentIndex < tasks.length){
+      // Option a: retroactive pause on the current step — exactly as if a
+      // normal pause of this length had just happened, via the same
+      // paused-time mechanism the live Pause feature uses, so the step's own
+      // active time/average excludes it. Deliberately does NOT touch the
+      // projected-finish math: that already reads real wall-clock elapsed,
+      // which genuinely did pass.
       today.pausedMsTotal = (today.pausedMsTotal || 0) + minutes*60000;
     }
     await saveActiveRoutine();
     renderActive();
+    if(useAll) flashCurrentTaskCard();
   });
 
   document.getElementById('endBtn').addEventListener('click', ()=>{
@@ -1272,7 +1494,7 @@
       startTime: today.startTime,
       finishTime: today.finishTime,
       routineId: r.id,
-      routineName: r.name,
+      routineName: routineDisplayName(r),
       entries: today.completedLog.map(e => ({
         taskId: e.taskId, name: e.name, plannedMin: e.plannedMin,
         actualMin: e.actualMin, pausedMin: e.pausedMin || 0, skipped: !!e.skipped,
@@ -1294,8 +1516,8 @@
     const deltaMin = Math.round((finish - target)/60000);
     document.getElementById('summaryVsTarget').innerHTML =
       deltaMin === 0 ? `Right on your ${settings.targetTime} target.` :
-      deltaMin > 0 ? `${deltaMin} min after your <b>${settings.targetTime}</b> target.` :
-      `${Math.abs(deltaMin)} min ahead of your <b>${settings.targetTime}</b> target.`;
+      deltaMin > 0 ? `${fmtDuration(deltaMin)} after your <b>${settings.targetTime}</b> target.` :
+      `${fmtDuration(Math.abs(deltaMin))} ahead of your <b>${settings.targetTime}</b> target.`;
 
     const table = document.getElementById('summaryTable');
     table.innerHTML = '';
@@ -1312,6 +1534,18 @@
       }
       table.appendChild(row);
     });
+
+    // Totals across the regular steps actually done (skipped and unplanned
+    // entries excluded, same rule as History's Total row).
+    const done = today.completedLog.filter(e => !e.unplanned && !e.skipped);
+    if(done.length){
+      const totalActual = done.reduce((s,e) => s + e.actualMin, 0);
+      const totalPlanned = done.reduce((s,e) => s + e.plannedMin, 0);
+      const row = document.createElement('tr');
+      row.className = 'summary-total-row';
+      row.innerHTML = `<td>Total</td><td>${fmtDuration(totalActual)} actual · ${fmtDuration(totalPlanned)} planned</td>`;
+      table.appendChild(row);
+    }
   }
 
   document.getElementById('newDayBtn').addEventListener('click', async ()=>{
@@ -1336,7 +1570,7 @@
     withHistory.forEach(r=>{
       const opt = document.createElement('option');
       opt.value = r.id;
-      opt.textContent = r.name;
+      opt.textContent = routineDisplayName(r);
       sel.appendChild(opt);
     });
     const preferred = withHistory.find(r => r.id === activeRoutineId) ? activeRoutineId : withHistory[0].id;
@@ -1412,12 +1646,12 @@
     // every render, so deleting a day (via the ✕ above) automatically
     // updates these with no separate cached numbers anywhere to maintain.
     html += `<tr class="hist-total-row"><td>Total</td>`;
-    days.forEach(day => { html += `<td>${Math.round(dayTotalMin(day))}</td>`; });
+    days.forEach(day => { html += `<td>${fmtDuration(dayTotalMin(day))}</td>`; });
     const allTotals = allDays.map(dayTotalMin);
-    const totalLow = Math.round(Math.min(...allTotals));
-    const totalHigh = Math.round(Math.max(...allTotals));
-    const totalAvg = Math.round(allTotals.reduce((a,b)=>a+b,0) / allTotals.length);
-    html += `<td class="stat-sep">${totalLow}</td><td>${totalHigh}</td><td>${totalAvg}</td></tr>`;
+    const totalLow = Math.min(...allTotals);
+    const totalHigh = Math.max(...allTotals);
+    const totalAvg = allTotals.reduce((a,b)=>a+b,0) / allTotals.length;
+    html += `<td class="stat-sep">${fmtDuration(totalLow)}</td><td>${fmtDuration(totalHigh)}</td><td>${fmtDuration(totalAvg)}</td></tr>`;
 
     rowKeys.forEach(rk => {
       html += `<tr${rk.unplanned ? ' class="unplanned-row"' : ''}><td>${escapeAttr(rk.label)}</td>`;
