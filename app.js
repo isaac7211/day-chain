@@ -236,7 +236,11 @@
     // Anchor to the calendar day the active routine started, not "right
     // now" — a routine can still be running past midnight, and its target
     // belongs to the evening/morning it began, not to the new date.
-    const base = (today && today.startTime) ? new Date(today.startTime) : new Date();
+    // (targetBase is only set when the start time was later moved earlier to
+    // fit backfilled durations — it keeps the target on the original day if
+    // that move crossed midnight.)
+    const baseMs = today ? (today.targetBase || today.startTime) : null;
+    const base = baseMs ? new Date(baseMs) : new Date();
     const d = new Date(base);
     d.setHours(hh, mm, 0, 0);
     return d.getTime();
@@ -1069,9 +1073,67 @@
     return total;
   }
 
+  // ---------- TIMELINE SAFEGUARDS ----------
+  // Moves the routine's recorded start (and the plan-baseline derived from it)
+  // earlier by ms — used whenever the durations the user has told us about
+  // add up to more time than the app has actually been running.
+  function moveStartEarlier(ms){
+    if(!(ms > 0)) return;
+    if(!today.targetBase) today.targetBase = today.startTime;
+    today.startTime -= ms;
+    if(today.baselineFinish) today.baselineFinish -= ms;
+  }
+
+  // Invariants for a running routine, enforced on EVERY render tick (so also
+  // on reload and on data that arrives from another device), not just where
+  // the bug was first seen:
+  //   - nothing recorded is ever in the future;
+  //   - a step's paused time never exceeds the wall-clock time since its
+  //     start anchor (otherwise active time = elapsed - paused is negative
+  //     and the timer would sit at 0:00 while running).
+  // A future anchor means durations were entered that add up to more than
+  // the time that has really passed, so the true start of the morning was
+  // EARLIER — the start moves back to match, and the anchor becomes "now"
+  // (never silently clamped to zero). Returns true if anything changed.
+  function normalizeTimeline(now){
+    if(!today || today.status !== 'active') return false;
+    let changed = false;
+    if(today.pausedAt && today.pausedAt > now){ today.pausedAt = now; changed = true; }
+    if(today.currentTaskRealStart > now){ today.currentTaskRealStart = now; changed = true; }
+    if(today.currentIndex < tasks.length){
+      if(today.currentTaskStart > now){
+        moveStartEarlier(today.currentTaskStart - now);
+        today.currentTaskStart = now;
+        changed = true;
+      }
+      const deficit = currentStepPausedMs() - (now - today.currentTaskStart);
+      if(deficit > 1){
+        // The paused/unplanned time really happened before now, on top of
+        // whatever came before this step — so the step's start AND the
+        // routine's start both move back by the shortfall (the earlier part
+        // of the timeline is untouched relative to itself, just shifted).
+        today.currentTaskStart -= deficit;
+        moveStartEarlier(deficit);
+        changed = true;
+      }
+      if(today.startTime > today.currentTaskStart){
+        moveStartEarlier(today.startTime - today.currentTaskStart);
+        changed = true;
+      }
+    }
+    if(today.startTime > now){ today.startTime = now; changed = true; }
+    return changed;
+  }
+
   // ---------- ACTIVE screen ----------
   function renderActive(){
     const now = Date.now();
+    if(normalizeTimeline(now)){
+      // Time already counted as passed on this step must not replay every
+      // alert at once, and the correction itself should survive a reload.
+      resetSoundTrackingForCurrentStep();
+      saveActiveRoutine();
+    }
     const idx = today.currentIndex;
 
     // build projections
@@ -1086,6 +1148,8 @@
     // what the step's OWN displayed timer and pace comparison use, so they
     // freeze while paused instead of racking up "over plan" time that isn't
     // really the step's fault.
+    // (The max(0) is only a display guard — normalizeTimeline() above already
+    // guarantees this can't be negative.)
     const activeElapsedMs = inRoutine ? Math.max(0, currentElapsedMs - currentStepPausedMs()) : 0;
     const remaining = inRoutine ? tasks.slice(idx+1) : [];
     const remainingEstMs = remaining.reduce((s,t)=> s + plannedMinFor(t)*60000, 0);
@@ -1234,6 +1298,7 @@
   //   elapsed, so the same dialog naturally handles it too, one at a time.
   async function endCurrentStep({ skip, overrideActiveMin }){
     const now = Date.now();
+    normalizeTimeline(now);
     const idx = today.currentIndex;
     if(idx >= tasks.length) return;
     const task = tasks[idx];
@@ -1244,6 +1309,16 @@
     if(overrideActiveMin != null){
       actualMin = overrideActiveMin;
       nextStepStart = today.currentTaskStart + (overrideActiveMin + pausedMin)*60000;
+      // Backfilling: if the durations entered so far add up to more than the
+      // time that has really passed, this end time would land in the future
+      // (which used to freeze the next step's timer at 0:00 and push every
+      // projection later). The morning really started earlier than the app
+      // knew, so the start moves back by the overshoot and the next step
+      // begins right now.
+      if(nextStepStart > now){
+        moveStartEarlier(nextStepStart - now);
+        nextStepStart = now;
+      }
     } else {
       // Active minutes only — wall-clock time minus whatever was paused, so
       // a 40-minute step with a 10-minute pause logs 30 actual minutes
@@ -1410,7 +1485,9 @@
     document.getElementById('endStepChoice').hidden = false;
   });
   document.getElementById('endStepConfirmBtn').addEventListener('click', ()=>{
-    const minutes = Math.max(0, parseFloat(document.getElementById('endStepMinutesInput').value) || 0);
+    // Capped at 24 h so a stray extra digit can't drag the routine's start
+    // back by days.
+    const minutes = Math.min(1440, Math.max(0, parseFloat(document.getElementById('endStepMinutesInput').value) || 0));
     hideEndStepDialogUI();
     endCurrentStep({ skip:false, overrideActiveMin: minutes });
   });
@@ -1540,7 +1617,12 @@
       // active time/average excludes it. Deliberately does NOT touch the
       // projected-finish math: that already reads real wall-clock elapsed,
       // which genuinely did pass.
-      today.pausedMsTotal = (today.pausedMsTotal || 0) + minutes*60000;
+      today.pausedMsTotal = (today.pausedMsTotal || 0) + Math.min(1440, minutes)*60000;
+      // If that is more than the step has been running, the step's start
+      // moves earlier to cover it (the unplanned thing really did start
+      // before this step's recorded start) — otherwise active time would be
+      // negative and the timer would sit at 0:00 while running.
+      if(normalizeTimeline(Date.now())) resetSoundTrackingForCurrentStep();
     }
     await saveActiveRoutine();
     renderActive();
