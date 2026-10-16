@@ -790,6 +790,23 @@
     if(inputs.length) inputs[inputs.length - 1].focus();
   });
 
+  let toastTimer = null;
+  function showToast(msg){
+    const el = document.getElementById('toast');
+    el.textContent = '✓ ' + msg;
+    el.hidden = false;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; el.classList.remove('show'); }, 4000);
+  }
+  document.getElementById('toast').addEventListener('click', () => {
+    clearTimeout(toastTimer);
+    const el = document.getElementById('toast');
+    el.hidden = true; el.classList.remove('show');
+  });
+
   // ---------- SETUP screen ----------
   function renderSetup(){
     setInputValue(document.getElementById('routineNameInput'), routineName);
@@ -807,7 +824,10 @@
 
     if(justDuplicatedRoutineId && justDuplicatedRoutineId === activeRoutineId){
       justDuplicatedRoutineId = null;
-      window.scrollTo(0, 0);
+      // The Duplicate button is at the bottom of a long screen, so the banner
+      // at the top is often off-screen — also show a toast pinned to the
+      // viewport bottom, right where the user just tapped.
+      showToast(`Duplicated “${duplicateBanner.fromName}” — this is your new copy.`);
       banner.classList.remove('flash-confirm');
       void banner.offsetWidth;
       banner.classList.add('flash-confirm');
