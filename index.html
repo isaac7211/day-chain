@@ -81,6 +81,12 @@
     <main id="screen-setup" hidden>
       <button class="btn-ghost btn-small" id="backToRoutinesBtn">← All routines</button>
 
+      <div class="duplicate-banner" id="duplicateBanner" role="status" hidden>
+        <span class="duplicate-banner-icon" aria-hidden="true">✓</span>
+        <span id="duplicateBannerText"></span>
+        <button class="icon-btn" id="duplicateBannerClose" aria-label="Dismiss">✕</button>
+      </div>
+
       <div class="card" id="routineNameCard">
         <div class="label">Routine name</div>
         <input type="text" id="routineNameInput" class="routine-name-input" placeholder="Routine name">

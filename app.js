@@ -39,6 +39,10 @@
   // Set right before navigating into a freshly-duplicated routine's setup
   // screen, so renderSetup() can flash it once and then clear this.
   let justDuplicatedRoutineId = null;
+  // Persistent "you just duplicated X" banner on the setup screen: stays until
+  // dismissed, the user leaves the screen, or they start the routine — the
+  // brief flash alone was easy to miss.
+  let duplicateBanner = null; // { id, fromName }
 
   // ---------- storage helpers (Firestore, one doc per signed-in user) ----------
   // docRef/docCache are only ever set after auth resolves (see the
@@ -557,6 +561,7 @@
   }
 
   function showRoutineList(){
+    duplicateBanner = null;
     if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
     releaseKeepAwake();
     activeRoutineId = null;
@@ -615,6 +620,7 @@
   function duplicateAndOpen(src){
     const dup = duplicateRoutineObj(src);
     justDuplicatedRoutineId = dup.id;
+    duplicateBanner = { id: dup.id, fromName: routineDisplayName(src) };
     addRoutineAndOpen(dup);
   }
 
@@ -629,6 +635,11 @@
       list.appendChild(li);
     });
   }
+
+  document.getElementById('duplicateBannerClose').addEventListener('click', () => {
+    duplicateBanner = null;
+    document.getElementById('duplicateBanner').hidden = true;
+  });
 
   document.getElementById('newRoutineBtn').addEventListener('click', () => {
     const chooser = document.getElementById('newRoutineChooser');
@@ -785,8 +796,21 @@
     setInputValue(document.getElementById('targetLabelInput'), settings.targetLabel);
     populateAddStepSelect();
 
+    const banner = document.getElementById('duplicateBanner');
+    if(duplicateBanner && duplicateBanner.id === activeRoutineId){
+      document.getElementById('duplicateBannerText').textContent =
+        `Duplicated “${duplicateBanner.fromName}” — this is your new copy.`;
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+
     if(justDuplicatedRoutineId && justDuplicatedRoutineId === activeRoutineId){
       justDuplicatedRoutineId = null;
+      window.scrollTo(0, 0);
+      banner.classList.remove('flash-confirm');
+      void banner.offsetWidth;
+      banner.classList.add('flash-confirm');
       const card = document.getElementById('routineNameCard');
       card.classList.remove('flash-confirm');
       void card.offsetWidth;
@@ -941,6 +965,7 @@
     // Remembered on the routine itself so the list order still reflects this
     // start even if the run is later ended without any step being logged
     // (which saves no day record).
+    duplicateBanner = null;
     const activeR = getActiveRoutine();
     if(activeR) activeR.lastStartedAt = now;
     await persistTasks();
