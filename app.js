@@ -162,6 +162,29 @@
       n.querySelectorAll('input, textarea').forEach(hardenInput);
     }));
   }).observe(document.body, { childList: true, subtree: true });
+  // iOS offers "Undo Typing" on shake whenever the page still has edit
+  // history from ANY earlier typing — even in a field that is now hidden
+  // (e.g. the routine name from setup, or the unplanned-step form), which is
+  // why it can pop up on a screen with nothing to type into. Assigning a text
+  // control's value programmatically discards that control's undo history, so
+  // we do it for every field that isn't being edited right now: whenever a
+  // field loses focus and whenever the screen changes. The value is put back
+  // immediately, and no input events fire for programmatic sets.
+  function purgeInputUndoHistory(){
+    document.querySelectorAll('input, textarea').forEach(el=>{
+      if(el === document.activeElement) return;
+      const type = (el.getAttribute('type') || 'text').toLowerCase();
+      if(el.tagName !== 'TEXTAREA' && !['text','search','number','email','url','tel','time'].includes(type)) return;
+      const v = el.value;
+      el.value = '';
+      el.value = v;
+    });
+  }
+  document.addEventListener('focusout', e=>{
+    if(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement){
+      setTimeout(purgeInputUndoHistory, 0);
+    }
+  }, true);
   document.addEventListener('beforeinput', e=>{
     if(e.inputType === 'historyUndo' || e.inputType === 'historyRedo') e.preventDefault();
   }, true);
@@ -507,6 +530,7 @@
 
   // ---------- render router ----------
   function showScreen(id){
+    purgeInputUndoHistory();
     ['screen-routines','screen-setup','screen-active','screen-summary','screen-history','screen-library'].forEach(s=>{
       document.getElementById(s).hidden = (s !== id);
     });
