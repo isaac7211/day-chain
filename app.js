@@ -1792,36 +1792,54 @@
       return day.entries.filter(e => !e.unplanned && !e.skipped).reduce((s,e) => s + e.actualMin, 0);
     }
 
+    // Column order: Step | Low | High | Avg | one column per day (most
+    // recent first). The stats sit right beside the step names so they stay
+    // in view; the day columns scroll off to the right. The Avg column
+    // carries the divider (stat-sep) between the two groups.
     let html = `<div class="hist-wrap"><table class="hist-table"><thead><tr><th>Step</th>`;
+    html += `<th>Low</th><th>High</th><th class="stat-sep">Avg</th>`;
     days.forEach(day => {
       const label = new Date(day.startTime).toLocaleDateString(undefined, {month:'short', day:'numeric'});
       html += `<th>${escapeAttr(label)} <button class="del-day-btn" data-starttime="${day.startTime}" title="Delete this day">✕</button></th>`;
     });
-    html += `<th class="stat-sep">Low</th><th>High</th><th>Avg</th>`;
     html += `</tr></thead><tbody>`;
 
-    html += `<tr class="hist-meta-row"><td>Start</td>`;
+    html += `<tr class="hist-meta-row"><td>Start</td><td></td><td></td><td class="stat-sep"></td>`;
     days.forEach(day => { html += `<td>${fmtClock(day.startTime)}</td>`; });
-    html += `<td class="stat-sep"></td><td></td><td></td></tr>`;
-    html += `<tr class="hist-meta-row"><td>Finish</td>`;
+    html += `</tr>`;
+    html += `<tr class="hist-meta-row"><td>Finish</td><td></td><td></td><td class="stat-sep"></td>`;
     days.forEach(day => { html += `<td>${fmtClock(day.finishTime)}</td>`; });
-    html += `<td class="stat-sep"></td><td></td><td></td></tr>`;
+    html += `</tr>`;
 
     // TOTAL row: each visible day's summed actual duration, plus all-time
     // low/high/avg computed across every day ever logged for this routine
     // (not just the visible columns) — recomputed fresh from `allDays` on
     // every render, so deleting a day (via the ✕ above) automatically
     // updates these with no separate cached numbers anywhere to maintain.
-    html += `<tr class="hist-total-row"><td>Total</td>`;
-    days.forEach(day => { html += `<td>${fmtDuration(dayTotalMin(day))}</td>`; });
     const allTotals = allDays.map(dayTotalMin);
     const totalLow = Math.min(...allTotals);
     const totalHigh = Math.max(...allTotals);
     const totalAvg = allTotals.reduce((a,b)=>a+b,0) / allTotals.length;
-    html += `<td class="stat-sep">${fmtDuration(totalLow)}</td><td>${fmtDuration(totalHigh)}</td><td>${fmtDuration(totalAvg)}</td></tr>`;
+    html += `<tr class="hist-total-row"><td>Total</td><td>${fmtDuration(totalLow)}</td><td>${fmtDuration(totalHigh)}</td><td class="stat-sep">${fmtDuration(totalAvg)}</td>`;
+    days.forEach(day => { html += `<td>${fmtDuration(dayTotalMin(day))}</td>`; });
+    html += `</tr>`;
 
     rowKeys.forEach(rk => {
       html += `<tr${rk.unplanned ? ' class="unplanned-row"' : ''}><td>${escapeAttr(rk.label)}</td>`;
+
+      const durations = allDays
+        .map(day => day.entries.find(e => e.taskId === rk.taskId))
+        .filter(e => e && !e.skipped)
+        .map(e => e.actualMin);
+      if(durations.length){
+        const low = Math.round(Math.min(...durations));
+        const high = Math.round(Math.max(...durations));
+        const avg = Math.round(durations.reduce((a,b)=>a+b,0) / durations.length);
+        html += `<td class="hist-cell">${low}</td><td class="hist-cell">${high}</td><td class="hist-cell stat-sep">${avg}</td>`;
+      } else {
+        html += `<td class="hist-cell na">–</td><td class="hist-cell na">–</td><td class="hist-cell na stat-sep">–</td>`;
+      }
+
       days.forEach(day => {
         const entry = day.entries.find(e => e.taskId === rk.taskId);
         if(!entry){
@@ -1836,24 +1854,11 @@
           html += `<td class="hist-cell ${cls}">${Math.round(entry.actualMin)}/${Math.round(entry.plannedMin)}${pauseSuffix(entry.pausedMin)}</td>`;
         }
       });
-
-      const durations = allDays
-        .map(day => day.entries.find(e => e.taskId === rk.taskId))
-        .filter(e => e && !e.skipped)
-        .map(e => e.actualMin);
-      if(durations.length){
-        const low = Math.round(Math.min(...durations));
-        const high = Math.round(Math.max(...durations));
-        const avg = Math.round(durations.reduce((a,b)=>a+b,0) / durations.length);
-        html += `<td class="hist-cell stat-sep">${low}</td><td class="hist-cell">${high}</td><td class="hist-cell">${avg}</td>`;
-      } else {
-        html += `<td class="hist-cell na stat-sep">–</td><td class="hist-cell na">–</td><td class="hist-cell na">–</td>`;
-      }
       html += `</tr>`;
     });
 
     html += `</tbody></table></div>`;
-    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Total is the day's summed regular-step time (unplanned entries excluded). Low/High/Avg are computed across this routine's full stored history (up to 60 days), not just the days shown here. Most recent day on the left.</div>`;
+    html += `<div class="hist-note">Each cell reads actual&nbsp;/&nbsp;planned minutes — red means over, green means under. Total is the day's summed regular-step time (unplanned entries excluded). Low/High/Avg (next to the step names) are computed across this routine's full stored history (up to 60 days), not just the days shown here. The days follow to the right, most recent first.</div>`;
     container.innerHTML = html;
 
     container.querySelectorAll('.del-day-btn').forEach(btn=>{

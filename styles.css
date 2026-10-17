@@ -436,7 +436,7 @@ ul{ list-style:none; margin:0; padding:0; }
 .hist-table tr.hist-meta-row td:first-child{ color: var(--text-faint); }
 .hist-table tr.hist-total-row td{ font-weight:700; color: var(--text); border-bottom: 2px solid var(--border); }
 .hist-table tr.hist-total-row td:first-child{ color: var(--text); }
-.hist-table .stat-sep{ border-left: 1px solid var(--border); }
+.hist-table .stat-sep{ border-right: 1px solid var(--border); }
 .unplanned-row td:first-child{ font-style:italic; color: var(--text-dim); }
 .hist-cell.over{ color: var(--coral); }
 .hist-cell.under{ color: var(--sage); }
