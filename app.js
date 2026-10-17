@@ -579,13 +579,13 @@
   }
 
   // ---------- ROUTINE LIST screen ----------
-  // Most recent of: when the routine was created, or when it was last
+  // Most recent of: when the routine was created, last edited, or last
   // started. Routines from before createdAt existed have only their start
   // times (or 0 if never started); ties fall back to array order, where later
   // = added more recently.
   function routineSortKey(r){
     const started = (r.today && r.today.startTime) || (r.days && r.days.length && r.days[0].startTime) || 0;
-    return Math.max(r.createdAt || 0, r.lastStartedAt || 0, started);
+    return Math.max(r.createdAt || 0, r.lastStartedAt || 0, r.lastEditedAt || 0, started);
   }
 
   function showRoutineList(){
@@ -883,6 +883,7 @@
     list.querySelectorAll('.name-input').forEach(inp=>{
       inp.addEventListener('input', e=>{
         tasks[+e.target.dataset.idx].name = e.target.value;
+        markRoutineEdited();
         updateSetupPreview();
       });
       inp.addEventListener('blur', persistTasks);
@@ -891,6 +892,7 @@
       inp.addEventListener('input', e=>{
         const v = Math.max(1, parseInt(e.target.value)||1);
         tasks[+e.target.dataset.idx].baseEst = v;
+        markRoutineEdited();
         updateSetupPreview();
       });
       inp.addEventListener('blur', persistTasks);
@@ -898,6 +900,7 @@
     list.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click', e=>{
       const i = +e.target.dataset.idx;
       tasks.splice(i,1);
+      markRoutineEdited();
       persistTasks(); renderSetup();
     }));
 
@@ -919,6 +922,7 @@
         if(evt.oldIndex === evt.newIndex) return;
         const [moved] = tasks.splice(evt.oldIndex, 1);
         tasks.splice(evt.newIndex, 0, moved);
+        markRoutineEdited();
         persistTasks();
         renderSetup();
       }
@@ -966,12 +970,23 @@
 
   async function persistTasks(){ await saveActiveRoutine(); }
 
+  // Stamps the open routine as edited, which floats it to the top of the
+  // routine list (see routineSortKey). Called only where something actually
+  // changes — not on blur or on save, which also happen when nothing was
+  // touched (and during runs, which have their own lastStartedAt).
+  function markRoutineEdited(){
+    const r = getActiveRoutine();
+    if(r) r.lastEditedAt = Date.now();
+  }
+
   document.getElementById('routineNameInput').addEventListener('input', e=>{
     routineName = e.target.value;
+    markRoutineEdited();
   });
   document.getElementById('routineNameInput').addEventListener('blur', persistTasks);
   document.getElementById('targetLabelInput').addEventListener('input', e=>{
     settings.targetLabel = e.target.value;
+    markRoutineEdited();
   });
   document.getElementById('targetLabelInput').addEventListener('blur', persistTasks);
 
@@ -979,13 +994,14 @@
     const id = e.target.value;
     if(!id) return;
     const item = stepLibrary.find(x => x.id === id);
-    if(item) tasks.push({ id: uid(), name: item.name, baseEst: item.baseEst });
+    if(item){ tasks.push({ id: uid(), name: item.name, baseEst: item.baseEst }); markRoutineEdited(); }
     e.target.value = ''; // reset to placeholder — this select is an action trigger, not persistent state
     persistTasks(); renderSetup();
   });
   document.getElementById('goToLibraryFromSetupBtn').addEventListener('click', showLibrary);
   document.getElementById('targetTimeInput').addEventListener('change', e=>{
     settings.targetTime = e.target.value;
+    markRoutineEdited();
     persistTasks(); updateSetupPreview();
   });
   document.getElementById('startBtn').addEventListener('click', async ()=>{
