@@ -1326,7 +1326,12 @@
       // skip, since undo needs the TRUE active time even for a skipped step
       // (the logged entry below still zeroes it out for skips, unchanged).
       actualMin = Math.max(0, (now - today.currentTaskStart)/60000 - pausedMin);
-      nextStepStart = now;
+      // Skip hands the skipped step's accrued (active) time to the next
+      // step: its start anchor is backdated so it opens already showing that
+      // much (3:23 skipped -> next step starts at 3:23) instead of 0:00.
+      // Paused time isn't carried — it wasn't time spent working — and there
+      // is nothing to carry into if this was the last step.
+      nextStepStart = (skip && idx + 1 < tasks.length) ? now - actualMin*60000 : now;
     }
 
     // Single-level undo snapshot — overwritten on every step-ending action,
