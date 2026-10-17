@@ -533,8 +533,10 @@
   }
 
   // ---------- render router ----------
+  let currentScreenId = null;
   function showScreen(id){
     purgeInputUndoHistory();
+    currentScreenId = id;
     ['screen-routines','screen-setup','screen-active','screen-summary','screen-history','screen-library'].forEach(s=>{
       document.getElementById(s).hidden = (s !== id);
     });
@@ -547,7 +549,61 @@
     // just not what's on screen for a moment.
     document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup' || id === 'screen-library');
     document.getElementById('libraryBtn').hidden = !(id === 'screen-routines' || id === 'screen-setup' || id === 'screen-active');
+    updateRunningBanner();
   }
+
+  // ---------- RUNNING ROUTINE, WHILE AWAY FROM IT ----------
+  // A routine's run lives in its own record (routine.today), independent of
+  // the single "working copy" the screens edit — so the user can leave the
+  // active screen, browse/duplicate/create/edit OTHER routines, and come back
+  // to the run exactly where it was (all of its timing is real timestamps).
+  // Only one routine can be running at a time (Start is blocked otherwise).
+  function runningRoutine(){
+    return routines.find(r => r.today && r.today.status === 'active') || null;
+  }
+  // Keep-awake must survive leaving the active screen while a run is on —
+  // it can only be (re)acquired from a tap, so releasing it would lose it.
+  function releaseKeepAwakeUnlessRunning(){
+    if(!runningRoutine()) releaseKeepAwake();
+  }
+  // A bar under the header, on every screen except the run's own, showing
+  // what's running and giving a one-tap way back.
+  function updateRunningBanner(){
+    const banner = document.getElementById('runningBanner');
+    const rr = runningRoutine();
+    const show = rr && ['screen-routines','screen-setup','screen-library','screen-history'].includes(currentScreenId);
+    if(!show){ banner.hidden = true; return; }
+    const t = rr.today;
+    const step = rr.tasks[t.currentIndex];
+    let timer = '';
+    if(step){
+      const activeMs = Math.max(0, Date.now() - t.currentTaskStart - ((t.pausedMsTotal||0) + (t.pausedAt ? Date.now() - t.pausedAt : 0)));
+      timer = ` · ${fmtMMSS(activeMs)}${t.pausedAt ? ' paused' : ''}`;
+    }
+    banner.innerHTML = `<span class="rb-dot">●</span><span class="rb-text"><b>${escapeAttr(routineDisplayName(rr))}</b> is running — ${step ? escapeAttr(step.name) : 'finishing'}${timer}</span><span class="rb-go">Return ›</span>`;
+    banner.dataset.routineId = rr.id;
+    banner.hidden = false;
+  }
+  document.getElementById('runningBanner').addEventListener('click', e=>{
+    const id = e.currentTarget.dataset.routineId;
+    if(id) openRoutine(id);
+  });
+  // Runs once a second for the whole session. While the active screen is up,
+  // its own tick (renderActive) already does all of this; otherwise this
+  // keeps the banner live and keeps the running step's warning sounds
+  // firing even though that routine isn't on screen.
+  function backgroundTick(){
+    if(tickHandle) return;
+    updateRunningBanner();
+    const rr = runningRoutine();
+    if(!rr) return;
+    const t = rr.today;
+    const step = rr.tasks[t.currentIndex];
+    if(!step || t.pausedAt) return;
+    const activeMin = Math.max(0, (Date.now() - t.currentTaskStart - (t.pausedMsTotal || 0)) / 60000);
+    checkStepSoundAlerts(activeMin, plannedMinFor(step));
+  }
+  setInterval(backgroundTick, 1000);
 
   function renderAll(){
     if(!activeRoutineId){ showRoutineList(); return; }
@@ -564,12 +620,12 @@
       renderSummary();
       showScreen('screen-summary');
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
-      releaseKeepAwake();
+      releaseKeepAwakeUnlessRunning();
     } else {
       renderSetup();
       showScreen('screen-setup');
       if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
-      releaseKeepAwake();
+      releaseKeepAwakeUnlessRunning();
     }
   }
 
@@ -590,9 +646,15 @@
 
   function showRoutineList(){
     duplicateBanner = null;
+    // iOS doesn't always blur a focused field when a button is tapped, so
+    // write the working copy into its routine before letting go of it.
+    saveActiveRoutine();
     if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
-    releaseKeepAwake();
+    releaseKeepAwakeUnlessRunning();
     activeRoutineId = null;
+    // No routine is open on this screen. (If one is running, its run is
+    // safe in its own record — see runningRoutine().)
+    today = null;
     document.getElementById('newRoutineChooser').hidden = true;
     renderRoutineList();
     showScreen('screen-routines');
@@ -614,7 +676,8 @@
       const total = r.tasks.reduce((s,t) => s + t.baseEst, 0);
       const li = document.createElement('li');
       li.className = 'routine-list-item';
-      li.innerHTML = `<span class="name">${escapeAttr(routineDisplayName(r))}</span><span class="time">${fmtDuration(total)}</span>`;
+      const running = r.today && r.today.status === 'active';
+      li.innerHTML = `<span class="name">${escapeAttr(routineDisplayName(r))}${running ? ' <span class="running-tag">● In progress</span>' : ''}</span><span class="time">${fmtDuration(total)}</span>`;
       li.addEventListener('click', () => openRoutine(r.id));
       list.appendChild(li);
     });
@@ -680,12 +743,20 @@
   function openRoutine(id){
     const r = routines.find(x => x.id === id);
     if(!r) return;
+    if(activeRoutineId && activeRoutineId !== id) saveActiveRoutine(); // see showRoutineList
     loadWorkingStateFrom(r);
     deleteRoutineState = 'idle';
     persistActiveRoutineId();
     renderAll();
   }
   document.getElementById('backToRoutinesBtn').addEventListener('click', () => {
+    showRoutineList();
+  });
+  // From a running routine: leave it running and go browse/edit others. Any
+  // half-finished dialog on the active screen is closed so it comes back clean.
+  document.getElementById('activeBackToRoutinesBtn').addEventListener('click', () => {
+    hideEndStepDialogUI();
+    document.getElementById('unplannedForm').hidden = true;
     showRoutineList();
   });
 
@@ -1006,6 +1077,11 @@
   });
   document.getElementById('startBtn').addEventListener('click', async ()=>{
     if(tasks.length === 0){ alert('Add at least one step before starting.'); return; }
+    const other = runningRoutine();
+    if(other && other.id !== activeRoutineId){
+      alert(`"${routineDisplayName(other)}" is still running. Finish or end it before starting another routine.`);
+      return;
+    }
     // Must happen synchronously, right here, before any await below — this
     // click is the only user gesture we get, and both keep-awake mechanisms
     // need to be invoked while it's still "live" or iOS silently denies them.
