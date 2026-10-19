@@ -29,6 +29,11 @@
   let settings = { targetTime: '', targetLabel: '' };
   let routineName = '';
   let today = null; // active routine state
+  // Id of the routine whose data is ACTUALLY loaded into the working copy
+  // above. saveActiveRoutine() refuses to write unless this matches the open
+  // routine — otherwise an id with nothing loaded behind it would be saved
+  // over with the empty initial values (see the note on saveActiveRoutine).
+  let workingCopyId = null;
   let tickHandle = null;
   let deleteRoutineState = 'idle'; // 'idle' | 'confirm'
   // Step library: { id, name, baseEst } entries, purely a source of starting
@@ -57,6 +62,7 @@
 
   function loadWorkingStateFrom(r){
     activeRoutineId = r.id;
+    workingCopyId = r.id;
     tasks = r.tasks;
     settings = { targetTime: r.targetTime, targetLabel: r.targetLabel };
     routineName = r.name;
@@ -88,9 +94,14 @@
   }
   // Writes the working copy (tasks/settings/name/today) back into the open
   // routine's entry in `routines`, then persists the whole array.
+  // Writes the working copy into its routine. Only ever for the routine that
+  // is genuinely loaded there: on a cold start activeRoutineId can name the
+  // last-opened routine while the working copy is still empty, and saving
+  // then wiped that routine's name, steps and target (the "Untitled routine
+  // with no steps" bug).
   async function saveActiveRoutine(){
     const r = getActiveRoutine();
-    if(!r) return;
+    if(!r || workingCopyId !== r.id) return;
     r.tasks = tasks;
     r.targetTime = settings.targetTime;
     r.targetLabel = settings.targetLabel;
@@ -304,6 +315,34 @@
     docCache.routines = routines;
     docCache.activeRoutineId = activeRoutineId;
     return true; // caller needs to write this back
+  }
+
+  // One-time repair for routines already emptied by the bug above (name and
+  // steps wiped, target reset) that still have their run history: every
+  // finished day stores the routine's name and each step's id, name and
+  // planned minutes, so the steps come back from the fullest recorded run
+  // (the latest wins a tie). Step ids are kept, so History lines up. Target
+  // time/label were never stored per day and can't be recovered.
+  function repairWipedRoutines(){
+    const repaired = [];
+    routines.forEach(r => {
+      if(r.name && r.name.trim()) return;
+      if(r.tasks && r.tasks.length) return;
+      if(r.today && r.today.status === 'active') return;
+      const days = (r.days || []).filter(d => d.entries && d.entries.length);
+      if(!days.length) return;
+      const regular = d => d.entries.filter(e => !e.unplanned);
+      let best = days[0];
+      days.forEach(d => { if(regular(d).length > regular(best).length) best = d; });
+      if(!regular(best).length) return;
+      const recoveredName = days.map(d => d.routineName).find(n => n && n !== 'Untitled routine') || '';
+      r.name = recoveredName;
+      r.tasks = regular(best).map(e => ({ id: e.taskId, name: e.name, baseEst: Math.max(1, Math.round(e.plannedMin) || 10) }));
+      if(!r.targetTime) r.targetTime = '09:00';
+      if(r.targetLabel == null) r.targetLabel = '';
+      repaired.push(routineDisplayName(r));
+    });
+    return repaired;
   }
 
   // ---------- KEEP AWAKE (Wake Lock API, silent-video fallback for iOS) ----------
@@ -652,6 +691,7 @@
     if(tickHandle){ clearInterval(tickHandle); tickHandle = null; }
     releaseKeepAwakeUnlessRunning();
     activeRoutineId = null;
+    workingCopyId = null;
     // No routine is open on this screen. (If one is running, its run is
     // safe in its own record — see runningRoutine().)
     today = null;
@@ -890,7 +930,7 @@
   });
 
   let toastTimer = null;
-  function showToast(msg){
+  function showToast(msg, ms){
     const el = document.getElementById('toast');
     el.textContent = '✓ ' + msg;
     el.hidden = false;
@@ -898,7 +938,7 @@
     void el.offsetWidth;
     el.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { el.hidden = true; el.classList.remove('show'); }, 4000);
+    toastTimer = setTimeout(() => { el.hidden = true; el.classList.remove('show'); }, ms || 4000);
   }
   document.getElementById('toast').addEventListener('click', () => {
     clearTimeout(toastTimer);
@@ -2008,10 +2048,14 @@
       const needsMigrationWrite = migrateLegacyDataIfNeeded();
       if(!needsMigrationWrite){
         routines = docCache.routines || [];
-        activeRoutineId = docCache.activeRoutineId || null;
-        if(activeRoutineId && !routines.find(r => r.id === activeRoutineId)) activeRoutineId = null;
+        // Not adopted as the open routine here: nothing is loaded into the
+        // working copy yet. A running routine is opened by the resume step
+        // below; otherwise the user lands on the list.
+        activeRoutineId = null;
       }
       stepLibrary = docCache.stepLibrary || [];
+      const repairedNames = needsMigrationWrite ? [] : repairWipedRoutines();
+      if(repairedNames.length) persistRoutines();
       if(needsMigrationWrite){
         await docRef.set({ routines, activeRoutineId }, { merge: true })
           .catch(e => console.error('migration write failed', e));
@@ -2033,6 +2077,9 @@
         renderAll();
       } else {
         showRoutineList();
+      }
+      if(repairedNames.length){
+        showToast(`Restored ${repairedNames.map(n => '“' + n + '”').join(', ')} from its history — please check the steps and target time.`, 12000);
       }
     } else {
       docRef = null;
