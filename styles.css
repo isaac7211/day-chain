@@ -230,6 +230,7 @@ ul{ list-style:none; margin:0; padding:0; }
   color: var(--text-faint);
   margin: 10px 0 4px;
 }
+.keep-awake-status.warn{ color: var(--amber); font-size:12px; font-weight:600; }
 
 #endBtn{ width:100%; margin-top: 6px; }
 

@@ -346,24 +346,25 @@
   }
 
   // ---------- KEEP AWAKE (Wake Lock API, silent-video fallback for iOS) ----------
-  // The previous version only called navigator.wakeLock.request() from
-  // inside renderAll(), reached via `await persistTasks(); renderAll();` in
-  // the Start button's handler. By the time that ran, the await had already
-  // broken the "user gesture" context WebKit checks for this API, so the
-  // request silently failed every time (confirmed via console: NotAllowedError).
-  //
-  // Fix: both mechanisms below are invoked SYNCHRONOUSLY, as literally the
-  // first thing the Start button's click handler does, before any other
-  // await — that's what a gesture-gated API actually needs. Native Wake
-  // Lock is tried first; a silent looping <video> (muted, loop, playsinline
-  // — all required or iOS silently no-ops or fullscreens it) is started in
-  // parallel as a fallback and paused if the native lock succeeds. Both
-  // read/write the same `keepAwakeMode` so the UI can report which one is
-  // actually holding the screen open.
+  // Two independent mechanisms, run TOGETHER for the whole length of a run:
+  //   1. the native Screen Wake Lock API, and
+  //   2. a tiny silent looping <video> (the classic iOS trick — a playing
+  //      video stops the auto-lock).
+  // Both need a real tap to start, so Start's click handler calls
+  // engageKeepAwakeFromGesture() synchronously before any await (an await
+  // first breaks the "user gesture" iOS checks for). After a reload, or if
+  // either one is dropped, the next tap anywhere restarts it — see the hooks
+  // further down.
   let wakeLock = null;
   let keepAwakeVideo = null;
-  let keepAwakeMode = null; // 'wakelock' | 'video' | 'failed' | null
+  let keepAwakeWanted = false;     // true from Start/first tap until the run is over
+  let keepAwakeFailed = false;     // both mechanisms were refused on the last gesture attempt
 
+  // BOTH mechanisms run together for as long as a routine is running — the
+  // video is not a mere fallback. On iPhones, a home-screen web app's Wake
+  // Lock request can be granted yet do nothing (a known WebKit gap), and the
+  // old code paused the video the moment the lock was "granted", leaving
+  // nothing actually holding the screen on.
   function ensureKeepAwakeVideoEl(){
     if(keepAwakeVideo) return keepAwakeVideo;
     const v = document.createElement('video');
@@ -375,75 +376,106 @@
     v.loop = true;
     v.setAttribute('aria-hidden', 'true');
     v.style.cssText = 'position:fixed; top:0; left:0; width:1px; height:1px; opacity:0; pointer-events:none;';
+    // iOS can pause this video on its own (interruptions, backgrounding).
+    // If we still want it playing, start it again straight away.
+    v.addEventListener('pause', ()=>{
+      updateKeepAwakeIndicator();
+      if(keepAwakeWanted && document.visibilityState === 'visible' && runningRoutine()){
+        v.play().catch(()=>{});
+      }
+    });
+    v.addEventListener('playing', updateKeepAwakeIndicator);
     document.body.appendChild(v);
     keepAwakeVideo = v;
     return v;
   }
 
+  function keepAwakeVideoPlaying(){ return !!(keepAwakeVideo && !keepAwakeVideo.paused && !keepAwakeVideo.ended); }
+
   function updateKeepAwakeIndicator(){
     const el = document.getElementById('keepAwakeStatus');
     if(!el) return;
-    if(keepAwakeMode === 'wakelock'){
-      el.textContent = 'Screen staying awake · Wake Lock API';
+    const lock = !!wakeLock, video = keepAwakeVideoPlaying();
+    el.classList.remove('warn');
+    if(!keepAwakeWanted){
+      el.hidden = true;
+    } else if(lock && video){
+      el.textContent = 'Screen staying awake · Wake Lock + video both active';
       el.hidden = false;
-    } else if(keepAwakeMode === 'video'){
-      el.textContent = 'Screen staying awake · video fallback';
+    } else if(lock || video){
+      el.textContent = 'Screen staying awake · ' + (lock ? 'Wake Lock' : 'video') + ' only' + (lock ? ' (video not playing)' : ' (Wake Lock unavailable)');
       el.hidden = false;
-    } else if(keepAwakeMode === 'failed'){
-      el.textContent = 'Couldn’t keep the screen awake on this device';
+    } else if(keepAwakeFailed){
+      el.textContent = 'Couldn’t keep the screen awake on this device — tap here to retry';
+      el.classList.add('warn');
       el.hidden = false;
     } else {
-      el.hidden = true;
+      el.textContent = 'Tap anywhere to keep the screen awake';
+      el.classList.add('warn');
+      el.hidden = false;
     }
   }
 
-  // Call this SYNCHRONOUSLY from inside a click handler, before any await —
-  // that's the only way iOS reliably grants either mechanism below.
-  function engageKeepAwakeFromGesture(){
-    let wakeLockPromise = null;
-    if('wakeLock' in navigator){
-      try{ wakeLockPromise = navigator.wakeLock.request('screen'); }
-      catch(e){ wakeLockPromise = Promise.reject(e); }
-    }
+  function bindWakeLock(lock){
+    wakeLock = lock;
+    keepAwakeFailed = false;
+    lock.addEventListener('release', ()=>{
+      if(wakeLock === lock) wakeLock = null;
+      updateKeepAwakeIndicator();
+      // The OS/browser took it back (screen off, tab hidden, battery saver).
+      // Ask again; only works when the page is visible again, which is
+      // also what the visibilitychange handler below covers.
+      if(keepAwakeWanted && document.visibilityState === 'visible') requestWakeLock();
+    });
+    updateKeepAwakeIndicator();
+  }
 
+  let wakeLockPending = null;
+  function requestWakeLock(){
+    if(!('wakeLock' in navigator) || wakeLock) return Promise.resolve(!!wakeLock);
+    if(wakeLockPending) return wakeLockPending; // one tap fires several events
+    wakeLockPending = navigator.wakeLock.request('screen').then(lock=>{
+      bindWakeLock(lock);
+      console.log('[keep-awake] Wake Lock held');
+      return true;
+    }).catch(e=>{
+      console.warn('[keep-awake] Wake Lock request refused', e && e.name);
+      updateKeepAwakeIndicator();
+      return false;
+    }).then(ok=>{ wakeLockPending = null; return ok; });
+    return wakeLockPending;
+  }
+
+  function playKeepAwakeVideo(){
     const video = ensureKeepAwakeVideoEl();
-    const videoPlayPromise = Promise.resolve(video.play()).then(
-      () => true,
-      e => { console.warn('[keep-awake] video fallback failed to start', e); return false; }
-    );
+    if(keepAwakeVideoPlaying()) return Promise.resolve(true);
+    return Promise.resolve(video.play()).then(()=>{ updateKeepAwakeIndicator(); return true; }, e=>{
+      console.warn('[keep-awake] video failed to start', e && e.name);
+      updateKeepAwakeIndicator();
+      return false;
+    });
+  }
 
-    if(wakeLockPromise){
-      wakeLockPromise.then(lock=>{
-        wakeLock = lock;
-        keepAwakeMode = 'wakelock';
-        wakeLock.addEventListener('release', ()=>{
-          wakeLock = null;
-          if(keepAwakeMode === 'wakelock') keepAwakeMode = null;
-          updateKeepAwakeIndicator();
-        });
-        console.log('[keep-awake] engaged via native Wake Lock API');
-        video.pause(); // native lock is enough; the fallback isn't needed
-        updateKeepAwakeIndicator();
-      }).catch(async e=>{
-        console.warn('[keep-awake] native Wake Lock unavailable/denied — falling back to video', e);
-        const playing = await videoPlayPromise;
-        keepAwakeMode = playing ? 'video' : 'failed';
-        if(keepAwakeMode === 'video') console.log('[keep-awake] engaged via silent video fallback');
-        else console.error('[keep-awake] both mechanisms failed — screen may still auto-lock');
-        updateKeepAwakeIndicator();
-      });
-    } else {
-      console.log('[keep-awake] Wake Lock API not supported here — using video fallback');
-      videoPlayPromise.then(playing=>{
-        keepAwakeMode = playing ? 'video' : 'failed';
-        if(keepAwakeMode === 'video') console.log('[keep-awake] engaged via silent video fallback');
-        else console.error('[keep-awake] video fallback failed too — screen may still auto-lock');
-        updateKeepAwakeIndicator();
-      });
-    }
+  // Starts (or re-starts) both mechanisms. When called SYNCHRONOUSLY inside a
+  // tap handler, before any await, iOS grants either one. Without a tap it
+  // may be refused — that's fine, the tap hook below will try again on the
+  // very next tap.
+  function engageKeepAwakeFromGesture(){
+    keepAwakeWanted = true;
+    const lockP = requestWakeLock();
+    const videoP = playKeepAwakeVideo();
+    updateKeepAwakeIndicator();
+    Promise.all([lockP, videoP]).then(([lock, video])=>{
+      keepAwakeFailed = !lock && !video;
+      if(keepAwakeFailed) console.error('[keep-awake] both mechanisms refused — screen may still auto-lock');
+      else console.log('[keep-awake] engaged:', lock ? 'Wake Lock' : '-', video ? 'video' : '-');
+      updateKeepAwakeIndicator();
+    });
   }
 
   async function releaseKeepAwake(){
+    keepAwakeWanted = false;
+    keepAwakeFailed = false;
     if(wakeLock){
       const lock = wakeLock;
       wakeLock = null;
@@ -452,46 +484,46 @@
     if(keepAwakeVideo && !keepAwakeVideo.paused){
       keepAwakeVideo.pause();
     }
-    keepAwakeMode = null;
     updateKeepAwakeIndicator();
   }
 
-  // Both mechanisms are force-stopped by the OS whenever the tab is
-  // backgrounded (wake locks are always released; video playback is
-  // paused). Re-engage whichever is relevant once the tab is visible again
-  // — this does NOT need a fresh user gesture: re-acquiring a wake lock on
-  // visibilitychange is the documented pattern for this API, and resuming
-  // a video that already played once from a real gesture earlier in the
-  // page's lifetime is allowed without another gesture.
+  // Everything below is about keeping it held for the WHOLE run, however the
+  // app got into its current state — including a reload mid-run (which has
+  // no tap, so nothing could be started) and being on another screen.
+  function keepAwakeNeedsAttention(){
+    return !!runningRoutine() && (!wakeLock || !keepAwakeVideoPlaying());
+  }
+  // Retry without a tap (works for anything the browser allows silently).
+  function reengageKeepAwakeQuietly(){
+    if(!runningRoutine() || document.visibilityState !== 'visible') return;
+    keepAwakeWanted = true;
+    if(!wakeLock) requestWakeLock();
+    if(!keepAwakeVideoPlaying()) playKeepAwakeVideo();
+    updateKeepAwakeIndicator();
+  }
   document.addEventListener('visibilitychange', ()=>{
-    if(document.visibilityState !== 'visible') return;
-    if(!(today && today.status === 'active')) return;
-    if('wakeLock' in navigator){
-      navigator.wakeLock.request('screen').then(lock=>{
-        wakeLock = lock;
-        keepAwakeMode = 'wakelock';
-        wakeLock.addEventListener('release', ()=>{
-          wakeLock = null;
-          if(keepAwakeMode === 'wakelock') keepAwakeMode = null;
-          updateKeepAwakeIndicator();
-        });
-        if(keepAwakeVideo && !keepAwakeVideo.paused) keepAwakeVideo.pause();
-        updateKeepAwakeIndicator();
-      }).catch(()=>{
-        if(keepAwakeVideo && keepAwakeVideo.paused){
-          keepAwakeVideo.play().then(()=>{
-            keepAwakeMode = 'video';
-            updateKeepAwakeIndicator();
-          }).catch(e=>console.warn('[keep-awake] resume video failed', e));
-        }
-      });
-    } else if(keepAwakeVideo && keepAwakeVideo.paused){
-      keepAwakeVideo.play().then(()=>{
-        keepAwakeMode = 'video';
-        updateKeepAwakeIndicator();
-      }).catch(e=>console.warn('[keep-awake] resume video failed', e));
-    }
+    if(document.visibilityState === 'visible') reengageKeepAwakeQuietly();
   });
+  window.addEventListener('pageshow', reengageKeepAwakeQuietly);
+  window.addEventListener('focus', reengageKeepAwakeQuietly);
+  // A reload mid-run starts with neither mechanism and no tap to start them
+  // with, so the FIRST tap anywhere in the app (any button, any screen)
+  // starts both — and every tap after that re-tries if one has dropped.
+  // Capture phase so it runs inside the gesture before the tap's own action.
+  ['pointerdown', 'touchend', 'click'].forEach(type=>{
+    document.addEventListener(type, ()=>{
+      if(keepAwakeNeedsAttention()) engageKeepAwakeFromGesture();
+    }, true);
+  });
+  // Safety net: if either mechanism dropped for any reason, say so on screen
+  // and keep trying quietly.
+  setInterval(()=>{
+    if(!runningRoutine()){
+      if(keepAwakeWanted) releaseKeepAwake();
+      return;
+    }
+    if(keepAwakeNeedsAttention()) reengageKeepAwakeQuietly(); else updateKeepAwakeIndicator();
+  }, 5000);
 
   // ---------- SOUND ALERTS (active, non-paused step only) ----------
   // Two short, distinct clips: a gentle two-beep heads-up 2 minutes before
