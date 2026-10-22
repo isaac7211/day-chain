@@ -621,6 +621,7 @@
     document.getElementById('settingsBtn').hidden = (id === 'screen-routines' || id === 'screen-setup' || id === 'screen-library');
     document.getElementById('libraryBtn').hidden = !(id === 'screen-routines' || id === 'screen-setup' || id === 'screen-active');
     updateRunningBanner();
+    if(id === 'screen-setup') autoGrowRoutineName();
   }
 
   // ---------- RUNNING ROUTINE, WHILE AWAY FROM IT ----------
@@ -700,7 +701,25 @@
     }
   }
 
+  // The routine-name field is a textarea so a long name wraps onto as many
+  // lines as it needs instead of being cut off; it grows to fit its text.
+  // (Measured only while visible — a hidden element reports zero height.)
+  function autoGrowRoutineName(){
+    const el = document.getElementById('routineNameInput');
+    if(!el || el.offsetParent === null) return;
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+  }
+  window.addEventListener('resize', autoGrowRoutineName);
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(autoGrowRoutineName);
+  document.getElementById('routineNameInput').addEventListener('input', autoGrowRoutineName);
+  // A name is one paragraph — Enter just finishes editing.
+  document.getElementById('routineNameInput').addEventListener('keydown', e=>{
+    if(e.key === 'Enter'){ e.preventDefault(); e.target.blur(); }
+  });
+
   function applyRoutineHeroCopy(){
+    document.getElementById('activeRoutineName').textContent = routineDisplayName(routineName);
     document.getElementById('heroEyebrow').textContent = `Projected ${settings.targetLabel || 'target'}`;
     document.getElementById('summaryLabel').textContent = routineDisplayName(routineName);
   }

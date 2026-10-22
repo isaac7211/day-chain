@@ -91,7 +91,7 @@
 
       <div class="card" id="routineNameCard">
         <div class="label">Routine name</div>
-        <input type="text" id="routineNameInput" class="routine-name-input" placeholder="Routine name">
+        <textarea id="routineNameInput" class="routine-name-input" placeholder="Routine name" rows="1"></textarea>
       </div>
 
       <div class="card">
@@ -128,6 +128,7 @@
     <!-- ACTIVE SCREEN -->
     <main id="screen-active" hidden>
       <button class="btn-ghost btn-small" id="activeBackToRoutinesBtn">← All routines</button>
+      <div class="active-routine-name" id="activeRoutineName"></div>
 
       <div class="hero">
         <div class="eyebrow" id="heroEyebrow">Projected target</div>

@@ -298,9 +298,15 @@ ul{ list-style:none; margin:0; padding:0; }
   border:none;
   color: var(--text);
   font-family:'Fraunces', serif;
-  font-size: 22px;
+  font-size: 19px;   /* sized so a ~45-character name fits on two lines on a phone */
   font-weight:500;
   padding: 2px;
+  line-height:1.25;
+  display:block;
+  resize:none;        /* it's a textarea so long names wrap; it auto-grows */
+  overflow:hidden;
+  border-radius:0;
+  -webkit-appearance:none;
 }
 .routine-name-input:focus{ outline:none; border-bottom: 1px solid var(--amber); }
 .settings-row{
@@ -536,6 +542,11 @@ ul{ list-style:none; margin:0; padding:0; }
 .running-banner[hidden]{ display:none; }
 .running-banner:active{ filter: brightness(0.9); }
 .rb-dot{ color: var(--sage); font-size:12px; flex:none; }
-.rb-text{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric: tabular-nums; }
+.rb-text{ flex:1; min-width:0; overflow-wrap:anywhere; line-height:1.3; font-variant-numeric: tabular-nums; }
 .rb-go{ color: var(--sage); font-weight:600; flex:none; }
 .running-tag{ color: var(--sage); font-size:12px; font-weight:600; margin-left:6px; }
+
+.active-routine-name{
+  font-family:'Fraunces', serif; font-size:19px; font-weight:500; line-height:1.25;
+  color: var(--text); margin: 10px 2px 12px; overflow-wrap:anywhere;
+}
